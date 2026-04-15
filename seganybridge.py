@@ -418,63 +418,105 @@ def _run_test(model_type, checkpoint_path):
     return 0
 
 
-def _run_job(params):
-    checkpoint_path = params["checkpoint_path"]
-    model_type = params.get("model_type", "auto")
+def _run_inference(strategy, sam, params):
+    """Run a single segmentation using an already-loaded model."""
     image_path = params["image_path"]
     seg_type = params["seg_type"]
     mask_type = params.get("mask_type", "Multiple")
     save_prefix = params["save_prefix"]
     format_binary = params.get("format_binary", True)
 
-    strategy, sam, _ = _prepare_model(checkpoint_path, model_type)
-    if sam is None:
-        return 1
-
     cvImage = cv2.imread(image_path)
     if cvImage is None:
-        print(f"Error: could not read image: {image_path}")
-        strategy.cleanup()
-        return 1
+        raise RuntimeError(f"Could not read image: {image_path}")
     cvImage = cv2.cvtColor(cvImage, cv2.COLOR_BGR2RGB)
 
-    try:
-        if seg_type == "Auto":
-            auto_kwargs = {}
-            if isinstance(strategy, SAM2Strategy):
-                if "seg_res" in params:
-                    auto_kwargs["segRes"] = params["seg_res"]
-                if "crop_n_layers" in params:
-                    auto_kwargs["cropNLayers"] = int(params["crop_n_layers"])
-                if "min_mask_area" in params:
-                    auto_kwargs["minMaskArea"] = int(params["min_mask_area"])
-            strategy.segment_auto(
-                sam, cvImage, save_prefix, format_binary, **auto_kwargs
-            )
-        elif seg_type in {"Selection", "Box-Selection"}:
-            sel_file = params["sel_file"]
-            box_coords = params.get("box_coords")
-            strategy.segment_sel(
-                sam,
-                cvImage,
-                mask_type,
-                sel_file,
-                box_coords,
-                save_prefix,
-                format_binary,
-            )
-        elif seg_type == "Box":
-            box_coords = params["box_coords"]
-            strategy.segment_box(
-                sam, cvImage, mask_type, box_coords, save_prefix, format_binary
-            )
-        else:
-            print(f"Unknown segmentation type: {seg_type}")
-            return 1
-    finally:
-        print("Done!")
-        strategy.cleanup()
-    return 0
+    if seg_type == "Auto":
+        auto_kwargs = {}
+        if isinstance(strategy, SAM2Strategy):
+            if "seg_res" in params:
+                auto_kwargs["segRes"] = params["seg_res"]
+            if "crop_n_layers" in params:
+                auto_kwargs["cropNLayers"] = int(params["crop_n_layers"])
+            if "min_mask_area" in params:
+                auto_kwargs["minMaskArea"] = int(params["min_mask_area"])
+        strategy.segment_auto(
+            sam, cvImage, save_prefix, format_binary, **auto_kwargs
+        )
+    elif seg_type in {"Selection", "Box-Selection"}:
+        strategy.segment_sel(
+            sam,
+            cvImage,
+            mask_type,
+            params["sel_file"],
+            params.get("box_coords"),
+            save_prefix,
+            format_binary,
+        )
+    elif seg_type == "Box":
+        strategy.segment_box(
+            sam,
+            cvImage,
+            mask_type,
+            params["box_coords"],
+            save_prefix,
+            format_binary,
+        )
+    else:
+        raise ValueError(f"Unknown segmentation type: {seg_type}")
+
+
+def _serve(real_stdout):
+    """Daemon mode. Read JSON jobs from stdin, keep models loaded across jobs.
+
+    All informational output goes to stderr; only single-line JSON status
+    messages are written to ``real_stdout`` so the plugin can parse them.
+    """
+    sys.stdout = sys.stderr  # any stray prints inside strategies go to stderr
+
+    def _emit(obj):
+        real_stdout.write(json.dumps(obj) + "\n")
+        real_stdout.flush()
+
+    cache = {}  # (checkpoint_path, model_type) -> (strategy, sam)
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            params = json.loads(line)
+        except json.JSONDecodeError as e:
+            _emit({"status": "error", "message": f"invalid JSON: {e}"})
+            continue
+
+        if params.get("action") == "shutdown":
+            break
+
+        try:
+            checkpoint_path = params["checkpoint_path"]
+            model_type = params.get("model_type", "auto")
+            cache_key = (checkpoint_path, model_type)
+            if cache_key in cache:
+                strategy, sam = cache[cache_key]
+                print(
+                    f"Reusing cached model for {os.path.basename(checkpoint_path)}"
+                )
+            else:
+                strategy, sam, _ = _prepare_model(checkpoint_path, model_type)
+                if sam is None:
+                    raise RuntimeError("model load failed (see log above)")
+                # Temporary .pth (from .safetensors) is no longer needed once
+                # the model is built — drop it but keep the loaded model.
+                strategy.cleanup()
+                cache[cache_key] = (strategy, sam)
+            _run_inference(strategy, sam, params)
+            print("Done!")
+            _emit({"status": "done"})
+        except Exception as e:
+            import traceback
+
+            traceback.print_exc(file=sys.stderr)
+            _emit({"status": "error", "message": str(e)})
 
 
 def main():
@@ -483,22 +525,18 @@ def main():
     if len(sys.argv) == 3:
         sys.exit(_run_test(sys.argv[1], sys.argv[2]))
 
-    # Full job mode: read a JSON parameter blob from stdin.
     if len(sys.argv) != 1:
-        print("Usage:")
-        print("  python seganybridge.py                                  "
-              "# JSON job from stdin")
-        print("  python seganybridge.py <model_type|auto> <checkpoint>   "
-              "# backend test")
+        print(
+            "Usage:\n"
+            "  python seganybridge.py                                  "
+            "# daemon: JSON jobs from stdin\n"
+            "  python seganybridge.py <model_type|auto> <checkpoint>   "
+            "# backend test",
+            file=sys.stderr,
+        )
         sys.exit(2)
 
-    try:
-        params = json.load(sys.stdin)
-    except json.JSONDecodeError as e:
-        print(f"Error: invalid JSON on stdin: {e}")
-        sys.exit(2)
-
-    sys.exit(_run_job(params))
+    _serve(real_stdout=sys.stdout)
 
 
 if __name__ == "__main__":

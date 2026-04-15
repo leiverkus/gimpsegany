@@ -20,6 +20,9 @@ from gi.repository import GLib
 import tempfile
 import subprocess
 import shutil
+import threading
+import collections
+import atexit
 from os.path import exists
 from array import array
 import random
@@ -387,36 +390,124 @@ def getPathDict(image):
     return {}
 
 
-def bridgeRun(pythonPath, scriptPath, params, env_vars=None):
-    """Invoke the bridge with a JSON parameter blob on stdin.
+# --- Persistent bridge process -------------------------------------------
+#
+# GIMP 3 keeps the plugin's Python interpreter alive between menu invocations,
+# so we can keep the SAM backend loaded as a long-running subprocess. The
+# first segmentation pays the model-load cost; subsequent ones (even with
+# different parameters, as long as the same checkpoint is used) skip it.
 
-    Returns (success, stderr_text).
-    """
-    if env_vars is None:
-        env_vars = os.environ.copy()
+_bridge_proc = None
+_bridge_python = None
+_bridge_script = None
+_bridge_stderr_buf = collections.deque(maxlen=400)
+_bridge_lock = threading.Lock()
 
-    payload = json.dumps(params)
-    logging.info("Running bridge: %s %s", pythonPath, scriptPath)
+
+def _drain_bridge_stderr(proc, buf):
+    """Continuously copy bridge stderr into a ring buffer + the plugin log."""
     try:
-        process = subprocess.Popen(
+        for line in iter(proc.stderr.readline, ""):
+            if not line:
+                break
+            buf.append(line)
+            sys.stderr.write("[bridge] " + line)
+    except Exception:
+        pass
+
+
+def _shutdown_bridge():
+    global _bridge_proc, _bridge_python, _bridge_script
+    proc = _bridge_proc
+    if proc is None:
+        return
+    _bridge_proc = None
+    _bridge_python = None
+    _bridge_script = None
+    if proc.poll() is None:
+        try:
+            proc.stdin.write(json.dumps({"action": "shutdown"}) + "\n")
+            proc.stdin.flush()
+        except Exception:
+            pass
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            proc.kill()
+
+
+atexit.register(_shutdown_bridge)
+
+
+def _spawn_bridge(pythonPath, scriptPath):
+    global _bridge_proc, _bridge_python, _bridge_script, _bridge_stderr_buf
+    _bridge_stderr_buf = collections.deque(maxlen=400)
+    try:
+        proc = subprocess.Popen(
             [pythonPath, scriptPath],
-            env=env_vars,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,  # line-buffered
         )
     except FileNotFoundError as e:
-        return False, f"Could not launch python interpreter: {e}"
+        return None, f"Could not launch python interpreter: {e}"
 
-    stdout, stderr = process.communicate(input=payload.encode("utf-8"))
-    if stdout:
-        for line in stdout.decode("utf-8", errors="replace").splitlines():
-            print(line)
-    stderr_text = stderr.decode("utf-8", errors="replace") if stderr else ""
-    if process.returncode != 0:
-        logging.error("Bridge failed (rc=%s):\n%s", process.returncode, stderr_text)
-        return False, stderr_text or f"Bridge exited with code {process.returncode}"
-    return True, stderr_text
+    _bridge_proc = proc
+    _bridge_python = pythonPath
+    _bridge_script = scriptPath
+    threading.Thread(
+        target=_drain_bridge_stderr,
+        args=(proc, _bridge_stderr_buf),
+        daemon=True,
+    ).start()
+    return proc, None
+
+
+def bridgeRun(pythonPath, scriptPath, params):
+    """Send a job to the (long-running) bridge and wait for the JSON result.
+
+    Returns (success, message). On failure ``message`` contains the most
+    recent bridge stderr output, which is shown to the user.
+    """
+    with _bridge_lock:
+        proc = _bridge_proc
+        if (
+            proc is None
+            or proc.poll() is not None
+            or _bridge_python != pythonPath
+            or _bridge_script != scriptPath
+        ):
+            if proc is not None:
+                _shutdown_bridge()
+            proc, err = _spawn_bridge(pythonPath, scriptPath)
+            if proc is None:
+                return False, err
+
+        try:
+            proc.stdin.write(json.dumps(params) + "\n")
+            proc.stdin.flush()
+        except Exception as e:
+            _shutdown_bridge()
+            return False, f"Failed to send job to bridge: {e}"
+
+        status_line = proc.stdout.readline()
+        if not status_line:
+            # bridge died
+            _shutdown_bridge()
+            tail = "".join(_bridge_stderr_buf)
+            return False, "Bridge died unexpectedly.\n\n" + tail
+
+        try:
+            status = json.loads(status_line)
+        except json.JSONDecodeError:
+            _shutdown_bridge()
+            return False, f"Invalid response from bridge: {status_line!r}"
+
+        if status.get("status") != "done":
+            return False, status.get("message", "unknown bridge error")
+        return True, ""
 
 
 def unpackBoolArray(filepath):
