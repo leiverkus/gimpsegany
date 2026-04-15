@@ -616,11 +616,16 @@ def _spawn_bridge(pythonPath, scriptPath):
     return proc, None
 
 
-def bridgeRun(pythonPath, scriptPath, params):
+def bridgeRun(pythonPath, scriptPath, params, progress_cb=None):
     """Send a job to the (long-running) bridge and wait for the JSON result.
 
     Returns (success, message). On failure ``message`` contains the most
     recent bridge stderr output, which is shown to the user.
+
+    ``progress_cb`` — if supplied, called as ``progress_cb(text, stage)``
+    for every ``{"status": "progress", ...}`` line the bridge emits before
+    the terminal ``done`` or ``error`` message. The callback runs on the
+    plugin thread, so it must be quick and non-blocking.
     """
     with _bridge_lock:
         proc = _bridge_proc
@@ -643,22 +648,34 @@ def bridgeRun(pythonPath, scriptPath, params):
             _shutdown_bridge()
             return False, f"Failed to send job to bridge: {e}"
 
-        status_line = proc.stdout.readline()
-        if not status_line:
-            # bridge died
-            _shutdown_bridge()
-            tail = "".join(_bridge_stderr_buf)
-            return False, "Bridge died unexpectedly.\n\n" + tail
+        # Read status lines until we see a terminal one (done/error). The
+        # bridge may emit any number of {"status": "progress"} lines first.
+        while True:
+            status_line = proc.stdout.readline()
+            if not status_line:
+                # bridge died
+                _shutdown_bridge()
+                tail = "".join(_bridge_stderr_buf)
+                return False, "Bridge died unexpectedly.\n\n" + tail
 
-        try:
-            status = json.loads(status_line)
-        except json.JSONDecodeError:
-            _shutdown_bridge()
-            return False, f"Invalid response from bridge: {status_line!r}"
+            try:
+                status = json.loads(status_line)
+            except json.JSONDecodeError:
+                # Stray non-JSON line (shouldn't happen — stdout is JSON-only
+                # in daemon mode — but be forgiving rather than crashing).
+                continue
 
-        if status.get("status") != "done":
+            kind = status.get("status")
+            if kind == "progress":
+                if progress_cb is not None:
+                    try:
+                        progress_cb(status.get("text", ""), status.get("stage"))
+                    except Exception:
+                        pass  # never let a UI hiccup break the bridge loop
+                continue
+            if kind == "done":
+                return True, ""
             return False, status.get("message", "unknown bridge error")
-        return True, ""
 
 
 def unpackBoolArray(filepath):
@@ -984,8 +1001,26 @@ def run_segmentation(image, values):
     procedure.run(config)
 
     Gimp.progress_init("Running Segment Anything…")
+
+    def _progress(text, _stage):
+        # GIMP 3 Python bindings expose both set_text + pulse; fall back to
+        # re-initing if a given install lacks set_text.
+        try:
+            Gimp.progress_set_text(text)
+        except Exception:
+            try:
+                Gimp.progress_init(text)
+            except Exception:
+                pass
+        try:
+            Gimp.progress_pulse()
+        except Exception:
+            pass
+
     try:
-        success, stderr_text = bridgeRun(pythonPath, scriptFilepath, params)
+        success, stderr_text = bridgeRun(
+            pythonPath, scriptFilepath, params, progress_cb=_progress
+        )
     finally:
         Gimp.progress_end()
 
