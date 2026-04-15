@@ -13,6 +13,63 @@ gi.require_version("Gegl", "0.4")
 from gi.repository import Gio, Gegl
 from gi.repository import GLib
 
+# Give the plugin process a recognizable name. On Linux the task list and
+# the window's WM_CLASS pick this up; on macOS GLib's name never reaches
+# NSProcessInfo, so the menu bar keeps saying "Python" until the Carbon
+# TransformProcessType call in _macos_make_accessory_and_front() below.
+GLib.set_prgname("gimp-segment-anything")
+GLib.set_application_name("GIMP Segment Anything")
+
+
+def _macos_make_accessory_and_front():
+    """Hide the python-launcher Dock icon and pull the dialog to the front.
+
+    GIMP 3 runs python plugins as detached subprocesses, so on macOS the
+    plugin shows up as its own app in the Dock (with the python-launcher
+    rocket) and loses focus behind GIMP's main window. GTK's quartz
+    backend ignores keep_above / skip_taskbar_hint / present_with_time,
+    so the fix has to go directly through AppKit or Carbon.
+
+    GIMP's bundled python doesn't ship pyobjc, so we can't talk to
+    NSApplication via AppKit. Instead we use the Carbon Process Manager
+    through ctypes: TransformProcessType turns this process into a
+    "UIElement" (accessory) app — no Dock icon, no app menu, windows
+    can still receive focus — and SetFrontProcess raises it above GIMP.
+    Both calls are wrapped in try/except so a failure silently no-ops.
+    """
+    if sys.platform != "darwin":
+        return
+    try:
+        import ctypes
+        fw = ctypes.CDLL(
+            "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices"
+        )
+
+        class ProcessSerialNumber(ctypes.Structure):
+            _fields_ = [
+                ("highLongOfPSN", ctypes.c_uint32),
+                ("lowLongOfPSN", ctypes.c_uint32),
+            ]
+
+        fw.GetCurrentProcess.argtypes = [ctypes.POINTER(ProcessSerialNumber)]
+        fw.GetCurrentProcess.restype = ctypes.c_int32
+        fw.TransformProcessType.argtypes = [
+            ctypes.POINTER(ProcessSerialNumber),
+            ctypes.c_uint32,
+        ]
+        fw.TransformProcessType.restype = ctypes.c_int32
+        fw.SetFrontProcess.argtypes = [ctypes.POINTER(ProcessSerialNumber)]
+        fw.SetFrontProcess.restype = ctypes.c_int32
+
+        psn = ProcessSerialNumber(0, 0)
+        if fw.GetCurrentProcess(ctypes.byref(psn)) != 0:
+            return
+        # kProcessTransformToUIElementApplication = 4 → accessory app
+        fw.TransformProcessType(ctypes.byref(psn), 4)
+        fw.SetFrontProcess(ctypes.byref(psn))
+    except Exception:
+        pass
+
 
 import tempfile
 import subprocess
@@ -277,12 +334,18 @@ class DialogValue:
 
 class OptionsDialog(Gtk.Dialog):
     def __init__(self, image, boxPathDict):
-        Gtk.Dialog.__init__(self, title="Segment Anything", transient_for=None, flags=0)
+        Gtk.Dialog.__init__(
+            self,
+            title="GIMP — Segment Anything",
+            transient_for=None,
+            flags=Gtk.DialogFlags.MODAL,
+        )
         self.add_buttons(
             Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL, Gtk.STOCK_OK, Gtk.ResponseType.OK
         )
 
         self.set_default_size(400, 200)
+        self.set_modal(True)
 
         self.boxPathNames = sorted(boxPathDict.keys())
         self.isGrayScale = image.get_base_type() == Gimp.ImageType.GRAYA_IMAGE
@@ -897,6 +960,10 @@ class OptionsDialog(Gtk.Dialog):
         self.update_options_visibility(None)
         if not self.isGrayScale:
             self.on_random_toggled(self.randColBtn)
+        # On macOS, hide the rocket Dock icon and pull the window to the
+        # front via Carbon APIs (GTK's quartz backend can't do either).
+        # No-op on Linux/Windows.
+        _macos_make_accessory_and_front()
 
     def get_values(self):
         python_path = self.pythonPathEntry.get_text().strip()
