@@ -565,6 +565,20 @@ def _serve(real_stdout):
                     f"Reusing cached model for {os.path.basename(checkpoint_path)}"
                 )
             else:
+                # First-load messaging: HF ids may trigger a ~900 MB download,
+                # local files just stream from disk — tell the user which.
+                if _is_hf_id(checkpoint_path):
+                    _emit({
+                        "status": "progress",
+                        "stage": "loading_model",
+                        "text": f"Loading model from Hugging Face ({checkpoint_path})… (first run may download up to ~900 MB)",
+                    })
+                else:
+                    _emit({
+                        "status": "progress",
+                        "stage": "loading_model",
+                        "text": "Loading model…",
+                    })
                 strategy, sam, _ = _prepare_model(checkpoint_path, model_type)
                 if sam is None:
                     raise RuntimeError("model load failed (see log above)")
@@ -572,6 +586,11 @@ def _serve(real_stdout):
                 # the model is built — drop it but keep the loaded model.
                 strategy.cleanup()
                 cache[cache_key] = (strategy, sam)
+            _emit({
+                "status": "progress",
+                "stage": "inferring",
+                "text": f"Running {params.get('seg_type', 'segmentation').lower()} segmentation…",
+            })
             _run_inference(strategy, sam, params)
             print("Done!")
             _emit({"status": "done"})
