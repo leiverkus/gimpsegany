@@ -62,6 +62,45 @@ def _default_python_search_dir():
     return None
 
 
+def _discover_python_candidates():
+    """Enumerate plausible python3 interpreters for the Detect menu.
+
+    Returns (label, absolute_path) tuples for every conda/mamba env under
+    the usual roots plus a few system pythons. Used to populate a dropdown
+    menu next to the Python path field so users don't have to hand-type or
+    click through ``~/Library`` to find their sam2 env.
+    """
+    candidates = []
+    seen = set()
+
+    env_roots = [
+        "/opt/miniconda3/envs",
+        os.path.expanduser("~/miniconda3/envs"),
+        os.path.expanduser("~/anaconda3/envs"),
+        os.path.expanduser("~/mambaforge/envs"),
+        os.path.expanduser("~/miniforge3/envs"),
+    ]
+    for root in env_roots:
+        if not os.path.isdir(root):
+            continue
+        for env in sorted(os.listdir(root)):
+            py = os.path.join(root, env, "bin", "python")
+            if os.path.exists(py) and py not in seen:
+                candidates.append((f"{env}  ({py})", py))
+                seen.add(py)
+
+    for sys_py in (
+        "/opt/homebrew/bin/python3",
+        "/usr/local/bin/python3",
+        "/usr/bin/python3",
+    ):
+        if os.path.exists(sys_py) and sys_py not in seen:
+            candidates.append((sys_py, sys_py))
+            seen.add(sys_py)
+
+    return candidates
+
+
 # Curated SAM 2.1 models on Hugging Face. Selecting one of these in the
 # Model Source dropdown populates the checkpoint path with the HF repo id;
 # the bridge loads via build_sam2_hf() on first use and caches the weights
@@ -166,6 +205,7 @@ class OptionsDialog(Gtk.Dialog):
             "Select Python Path",
             self.values.pythonPath,
             default_folder=_default_python_search_dir(),
+            detect_candidates=_discover_python_candidates(),
         )
         grid.attach(pythonFileLbl, 0, 0, 1, 1)
         grid.attach(self.pythonPathBox, 1, 0, 1, 1)
@@ -290,9 +330,20 @@ class OptionsDialog(Gtk.Dialog):
         self.show_all()
 
     def _create_path_chooser(
-        self, title, initial_path=None, is_folder=False, default_folder=None
+        self,
+        title,
+        initial_path=None,
+        is_folder=False,
+        default_folder=None,
+        detect_candidates=None,
     ):
-        """Combined Entry + Browse button so paths can be typed/pasted or picked."""
+        """Combined Entry + Browse button so paths can be typed/pasted or picked.
+
+        When ``detect_candidates`` is a non-empty list of (label, path) tuples,
+        a "Detect…" button is added that pops up a menu of those entries;
+        picking one sets the entry text. An empty list renders the button
+        greyed out so users still see the affordance.
+        """
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
 
         entry = Gtk.Entry()
@@ -300,6 +351,31 @@ class OptionsDialog(Gtk.Dialog):
         if initial_path:
             entry.set_text(initial_path)
         box.pack_start(entry, True, True, 0)
+
+        if detect_candidates is not None:
+            detect_btn = Gtk.Button(label="Detect…")
+            detect_btn.set_sensitive(bool(detect_candidates))
+            menu = Gtk.Menu()
+            for cand_label, cand_path in detect_candidates:
+                item = Gtk.MenuItem(label=cand_label)
+
+                def _on_activate(_widget, path=cand_path):
+                    entry.set_text(path)
+
+                item.connect("activate", _on_activate)
+                menu.append(item)
+            menu.show_all()
+
+            def on_detect(widget):
+                menu.popup_at_widget(
+                    widget,
+                    Gdk.Gravity.SOUTH_WEST,
+                    Gdk.Gravity.NORTH_WEST,
+                    None,
+                )
+
+            detect_btn.connect("clicked", on_detect)
+            box.pack_start(detect_btn, False, False, 0)
 
         button = Gtk.Button(label="Browse…")
 
