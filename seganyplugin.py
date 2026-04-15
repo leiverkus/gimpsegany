@@ -116,6 +116,94 @@ HF_MODELS = [
     ("SAM 2.1 Tiny (~150 MB, fastest)", "facebook/sam2.1-hiera-tiny", "sam2_hiera_tiny"),
 ]
 
+
+# Common bridge errors translated into actionable hints. The first substring
+# found in the raw stderr wins, so ordering matters — put the most specific
+# needles first. The raw traceback is always appended underneath so power
+# users can still copy it.
+ERROR_HINTS = [
+    (
+        "No module named 'sam2'",
+        "The SAM2 package is not installed in the selected Python env.\n"
+        "Pick a different Python3 Path (e.g. your 'sam2' conda env) or install it with:\n"
+        "    pip install git+https://github.com/facebookresearch/sam2.git",
+    ),
+    (
+        "No module named 'huggingface_hub'",
+        "Hugging Face client is missing in the selected Python env — needed\n"
+        "to download models from HF. Install it with:\n"
+        "    pip install huggingface_hub",
+    ),
+    (
+        "No module named 'segment_anything'",
+        "SAM1 package is not installed. If you want SAM2 instead, pick one of\n"
+        "the 'SAM 2.1 …' entries in the Model Source dropdown.",
+    ),
+    (
+        "No module named 'cv2'",
+        "OpenCV is not installed in the selected Python env. Install with:\n"
+        "    pip install opencv-python",
+    ),
+    (
+        "No module named 'torch'",
+        "PyTorch is not installed in the selected Python env. On Apple Silicon\n"
+        "install the MPS-enabled build:\n"
+        "    pip install torch torchvision",
+    ),
+    (
+        "Torch not compiled with CUDA enabled",
+        "PyTorch has no CUDA support. On macOS Apple Silicon this is expected —\n"
+        "the plugin uses MPS automatically. If you still see this, your\n"
+        "seganybridge.py may be out of date.",
+    ),
+    (
+        "MPS backend out of memory",
+        "Apple Silicon GPU ran out of memory. Try a smaller model\n"
+        "(SAM 2.1 Small or Tiny) or close other GPU-heavy apps.",
+    ),
+    (
+        "CUDA out of memory",
+        "GPU ran out of memory. Try a smaller model (SAM 2.1 Small or Tiny).",
+    ),
+    (
+        "Could not read image",
+        "The image file could not be read. This is usually an internal PNG\n"
+        "export problem — try flattening the image and retrying.",
+    ),
+    (
+        "ConnectionError",
+        "No internet connection for the Hugging Face download. Connect and\n"
+        "retry, or point the Checkpoint field at a local .pt file.",
+    ),
+    (
+        "HTTPError",
+        "Hugging Face request failed. The model id may be wrong, or the HF\n"
+        "service is temporarily unavailable.",
+    ),
+    (
+        "model load failed",
+        "The bridge could not load the checkpoint. Common causes:\n"
+        "  • wrong Model Type for the checkpoint (SAM 2.0 vs 2.1 mismatch)\n"
+        "  • .pt file incomplete or corrupted\n"
+        "  • HF id typo\n"
+        "Try 'Model Source → SAM 2.1 Large' to get a known-good default.",
+    ),
+]
+
+
+def _translate_error(raw):
+    """Prepend an actionable hint to a raw bridge error if we recognize it.
+
+    Returns the raw text unchanged when nothing matches, so unknown errors
+    still reach the user verbatim.
+    """
+    if not raw:
+        return raw
+    for needle, hint in ERROR_HINTS:
+        if needle in raw:
+            return f"{hint}\n\n--- technical details ---\n{raw}"
+    return raw
+
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
 
@@ -675,7 +763,16 @@ def bridgeRun(pythonPath, scriptPath, params, progress_cb=None):
                 continue
             if kind == "done":
                 return True, ""
-            return False, status.get("message", "unknown bridge error")
+            # Error path: combine the JSON summary with the tail of stderr,
+            # because the bridge's generic message ("model load failed (see
+            # log above)") hides the real traceback from the user — and from
+            # _translate_error, which matches substrings against whatever we
+            # return here.
+            msg = status.get("message", "unknown bridge error")
+            stderr_tail = "".join(_bridge_stderr_buf).strip()
+            if stderr_tail:
+                return False, f"{msg}\n\n{stderr_tail}"
+            return False, msg
 
 
 def unpackBoolArray(filepath):
@@ -1026,10 +1123,8 @@ def run_segmentation(image, values):
 
     if not success:
         cleanup(filepathPrefix)
-        showError(
-            "Segment Anything bridge failed:\n\n"
-            + (stderr_text.strip() or "(no stderr)")
-        )
+        raw = stderr_text.strip() or "(no stderr)"
+        showError("Segment Anything bridge failed:\n\n" + _translate_error(raw))
         return
 
     layerMaskColor = None if values.isRandomColor else values.maskColor
