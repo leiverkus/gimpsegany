@@ -34,6 +34,24 @@ from sam2.build_sam import build_sam2
 from sam2.sam2_image_predictor import SAM2ImagePredictor
 from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
 
+try:
+    from sam2.build_sam import build_sam2_hf
+except ImportError:
+    build_sam2_hf = None
+
+# Maps Hugging Face model ids to the internal model_type the SAM2 strategy
+# expects. Both 2.0 and 2.1 ids are recognised.
+HF_MODEL_TYPE_LOOKUP = {
+    "facebook/sam2-hiera-tiny": "sam2_hiera_tiny",
+    "facebook/sam2-hiera-small": "sam2_hiera_small",
+    "facebook/sam2-hiera-base-plus": "sam2_hiera_base_plus",
+    "facebook/sam2-hiera-large": "sam2_hiera_large",
+    "facebook/sam2.1-hiera-tiny": "sam2_hiera_tiny",
+    "facebook/sam2.1-hiera-small": "sam2_hiera_small",
+    "facebook/sam2.1-hiera-base-plus": "sam2_hiera_base_plus",
+    "facebook/sam2.1-hiera-large": "sam2_hiera_large",
+}
+
 # SAM1 imports (optional – only needed when using SAM1 models)
 try:
     from segment_anything import (
@@ -252,6 +270,28 @@ class SAM2Strategy(SegmentationStrategy):
             print(f"Error converting safetensors to pth: {e}")
             return False
 
+    def load_from_hf(self, hf_id, device):
+        if build_sam2_hf is None:
+            print(
+                "Error: this sam2 install has no build_sam2_hf. "
+                "Update sam2 (pip install -U git+https://github.com/facebookresearch/sam2.git)."
+            )
+            return None
+        try:
+            print(f"Loading SAM2 from Hugging Face Hub: {hf_id}")
+            sam = build_sam2_hf(hf_id, device=device)
+            print("SAM2 Model loaded successfully!")
+            return sam
+        except ImportError as e:
+            print(
+                f"Error loading SAM2 model from HF: {e}\n"
+                "Hint: install the Hugging Face client with: pip install huggingface_hub"
+            )
+            return None
+        except Exception as e:
+            print(f"Error loading SAM2 model from HF: {e}")
+            return None
+
     def load_model(self, checkPtFilePath, modelType, device):
         model_filename = os.path.basename(checkPtFilePath)
         is_sam21 = model_filename.startswith("sam2.1")
@@ -381,14 +421,38 @@ def _detect_strategy(model_filename):
     return None
 
 
+def _is_hf_id(path):
+    """Heuristic: looks like ``org/model-name`` (no extension, not a real path)."""
+    if os.path.exists(path):
+        return False
+    if os.path.isabs(path) or path.startswith((".", "~")):
+        return False
+    if path.endswith((".pt", ".pth", ".safetensors")):
+        return False
+    return path.count("/") == 1
+
+
 def _prepare_model(checkpoint_path, model_type):
+    device = _select_device()
+
+    if _is_hf_id(checkpoint_path):
+        strategy = SAM2Strategy()
+        sam = strategy.load_from_hf(checkpoint_path, device)
+        if sam is None:
+            return None, None, None
+        _print_device(device)
+        return strategy, sam, device
+
     model_filename = os.path.basename(checkpoint_path)
     strategy = _detect_strategy(model_filename)
     if strategy is None:
         print(
             f"Error: Could not determine model family from filename: {model_filename}"
         )
-        print("Filename must start with 'sam_' for SAM1 or 'sam2' for SAM2.")
+        print(
+            "Filename must start with 'sam_' for SAM1 or 'sam2' for SAM2, "
+            "or be a Hugging Face id like 'facebook/sam2.1-hiera-large'."
+        )
         return None, None, None
 
     if model_type.lower() == "auto":
@@ -400,7 +464,6 @@ def _prepare_model(checkpoint_path, model_type):
         print(f"Error: Checkpoint file not found: {checkpoint_path}")
         return None, None, None
 
-    device = _select_device()
     sam = strategy.load_model(checkpoint_path, model_type, device)
     if sam is None:
         return None, None, None

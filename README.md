@@ -14,6 +14,8 @@ The plugin supports both **Segment Anything 1 (SAM1)** and **Segment Anything 2 
 - **SAM1 imports are optional** — the bridge no longer requires `segment_anything` to be installed when you only use SAM2.
 - **SAM 2.1 checkpoints** — the bridge auto-detects `sam2.1_*` checkpoint filenames and loads the matching configs from `configs/sam2.1/`.
 - **Editable path fields** — the Python and Checkpoint path fields in the plugin dialog accept typed/pasted paths (Entry + Browse button) instead of being limited to a file picker. The browse dialog also shows hidden files, which is required to reach `~/Library` on macOS.
+- **Persistent backend** — the bridge runs as a long-living subprocess and caches the loaded model. The first segmentation pays the model-load cost; subsequent ones skip it (≈8× faster on Apple Silicon).
+- **Hugging Face Hub support** — instead of a local `.pt` path you can paste a HF id like `facebook/sam2.1-hiera-large` into the Checkpoint field. Requires `pip install huggingface_hub` in the SAM environment.
 
 ---
 

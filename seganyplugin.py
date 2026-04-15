@@ -41,6 +41,16 @@ def _parse_int(text, default):
         return default
 
 
+def _looks_like_hf_id(path):
+    if not path or os.path.exists(path):
+        return False
+    if os.path.isabs(path) or path.startswith((".", "~")):
+        return False
+    if path.endswith((".pt", ".pth", ".safetensors")):
+        return False
+    return path.count("/") == 1
+
+
 def _default_python_search_dir():
     """Best-guess start directory for the python interpreter file picker."""
     for candidate in (
@@ -698,9 +708,13 @@ def showError(message):
 
 
 def validateOptions(image, values):
-    if not values.checkPtPath or not os.path.exists(values.checkPtPath):
+    if not values.checkPtPath or (
+        not os.path.exists(values.checkPtPath)
+        and not _looks_like_hf_id(values.checkPtPath)
+    ):
         showError(
-            "Checkpoint path is not set or does not exist:\n"
+            "Checkpoint path is not set, does not exist, "
+            "and is not a Hugging Face model id:\n"
             + (values.checkPtPath or "(empty)")
         )
         return False
