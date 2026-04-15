@@ -472,11 +472,19 @@ def _prepare_model(checkpoint_path, model_type):
 
 
 def _run_test(model_type, checkpoint_path):
-    strategy, sam, _ = _prepare_model(checkpoint_path, model_type)
+    strategy, sam, device = _prepare_model(checkpoint_path, model_type)
     if sam is None:
         return 1
     strategy.run_test(sam)
     print("Success!!")
+    # Structured line for the plugin's Setup Check button. Kept as the
+    # final stdout line so the plugin can grep for `"setup_check"` and
+    # extract the device without depending on the surrounding log prose.
+    print(json.dumps({
+        "setup_check": "ok",
+        "device": device,
+        "checkpoint": checkpoint_path,
+    }))
     strategy.cleanup()
     return 0
 

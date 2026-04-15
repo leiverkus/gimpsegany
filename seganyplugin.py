@@ -419,6 +419,13 @@ class OptionsDialog(Gtk.Dialog):
         self.autoSelectChk.set_active(self.values.autoSelectTopMask)
         grid.attach(self.autoSelectChk, 1, 12, 1, 1)
 
+        # Setup check: runs the bridge in test mode with the current
+        # python/checkpoint and reports a checklist. Spans both columns so
+        # it visually separates from the option rows above.
+        self.setupCheckBtn = Gtk.Button(label="Run Setup Check")
+        self.setupCheckBtn.connect("clicked", self.on_setup_check_clicked)
+        grid.attach(self.setupCheckBtn, 0, 13, 2, 1)
+
         self.connect("map-event", self.on_map_event)
         self.segTypeDropDown.connect("changed", self.update_options_visibility)
         self.modelTypeDropDown.connect("changed", self.update_options_visibility)
@@ -581,6 +588,109 @@ class OptionsDialog(Gtk.Dialog):
         is_random = self.randColBtn.get_active()
         self.maskColorLbl.set_visible(not is_random)
         self.maskColorBtn.set_visible(not is_random)
+
+    def on_setup_check_clicked(self, widget):
+        """Run seganybridge.py in test mode and show a checklist.
+
+        This intentionally spawns a fresh subprocess (not the cached
+        daemon) so the test exercises the exact python path + checkpoint
+        the user has in the dialog right now, and a bad selection doesn't
+        poison the running daemon.
+        """
+        python_path = self.pythonPathEntry.get_text().strip() or "python"
+        checkpoint = self.checkPtPathEntry.get_text().strip()
+        if not checkpoint:
+            showError(
+                "Set a Checkpoint path or pick a Model Source before running "
+                "the setup check."
+            )
+            return
+
+        full_model_type = self.modelTypeVals[self.modelTypeDropDown.get_active()]
+        if full_model_type == "Auto":
+            model_type = "auto"
+        else:
+            model_type = full_model_type.split(" ")[0]
+
+        # Warn the user if the check may trigger a large HF download.
+        if _looks_like_hf_id(checkpoint):
+            warn = Gtk.MessageDialog(
+                self,
+                Gtk.DialogFlags.MODAL,
+                Gtk.MessageType.QUESTION,
+                Gtk.ButtonsType.YES_NO,
+                (
+                    "Setup check will load the model via Hugging Face.\n"
+                    "If it isn't cached yet this can download up to ~900 MB "
+                    "and take several minutes.\n\nContinue?"
+                ),
+            )
+            resp = warn.run()
+            warn.destroy()
+            if resp != Gtk.ResponseType.YES:
+                return
+
+        bridge_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "seganybridge.py"
+        )
+
+        try:
+            result = subprocess.run(
+                [python_path, bridge_path, model_type, checkpoint],
+                capture_output=True,
+                text=True,
+                timeout=600,
+            )
+        except FileNotFoundError:
+            showError(
+                f"Python interpreter not found or not executable:\n{python_path}"
+            )
+            return
+        except subprocess.TimeoutExpired:
+            showError(
+                "Setup check timed out after 10 minutes. If this is a first-run "
+                "Hugging Face download on a slow connection, run the bridge "
+                "manually once to cache the weights."
+            )
+            return
+
+        device = None
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if line.startswith("{") and "setup_check" in line:
+                try:
+                    device = json.loads(line).get("device")
+                except json.JSONDecodeError:
+                    pass
+
+        if result.returncode == 0:
+            device_txt = f" (device: {device})" if device else ""
+            message = (
+                "Setup check passed.\n\n"
+                f"  ✓ Python interpreter starts\n"
+                f"  ✓ torch available{device_txt}\n"
+                f"  ✓ sam2 package importable\n"
+                f"  ✓ Checkpoint loads: {checkpoint}\n"
+                f"  ✓ Test inference succeeds"
+            )
+            dlg = Gtk.MessageDialog(
+                self,
+                Gtk.DialogFlags.MODAL,
+                Gtk.MessageType.INFO,
+                Gtk.ButtonsType.OK,
+                message,
+            )
+        else:
+            raw = (result.stderr + result.stdout).strip() or "(no output)"
+            dlg = Gtk.MessageDialog(
+                self,
+                Gtk.DialogFlags.MODAL,
+                Gtk.MessageType.ERROR,
+                Gtk.ButtonsType.OK,
+                "Setup check failed:\n\n" + _translate_error(raw),
+            )
+        dlg.run()
+        dlg.destroy()
 
     def on_map_event(self, widget, event):
         self.update_options_visibility(None)
