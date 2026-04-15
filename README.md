@@ -78,49 +78,57 @@ Click **Run Setup Check** to verify the combo works before running a real segmen
 
 ## Plugin Usage
 
-### Options
+### Dialog options
 
-- **Python3 Path:** The Python executable used to run the `seganybridge.py` backend.
-- **Model Type:** SAM model variant. `Auto` infers the type from the checkpoint filename (`sam_*` → SAM1, `sam2*` / `sam2.1*` → SAM2).
-- **Checkpoint Path:** Full path to the model checkpoint (`.pth`, `.pt`, or `.safetensors`).
+At the top of the dialog, the **Preset** bar lets you save the current option combo under a name and reload it later. *Save as…* snapshots everything below (except the python interpreter, which is machine-specific) into `segany_settings.json`; *Delete* removes the active preset.
+
+**Interpreter & model:**
+
+- **Python3 Path** — the python used to run `seganybridge.py`. Type/paste a path, click *Browse…*, or click *Detect…* to pick from conda envs found under `~/miniconda3/envs`, `~/anaconda3/envs`, `~/mambaforge/envs`, `~/miniforge3/envs`, plus Homebrew/system python3s.
+- **Model Source** — curated Hugging Face presets (SAM 2.1 Large / Base+ / Small / Tiny). Picking one fills *Checkpoint Path* with the HF id and aligns *Model Type*; on first run the weights are downloaded via `huggingface_hub` and cached under `~/.cache/huggingface`. Choose *— Custom checkpoint —* to point at a local file instead.
+- **Model Type** — `Auto` infers from the checkpoint name (`sam_*` → SAM1, `sam2*` / `sam2.1*` → SAM2). Override when auto-detection picks the wrong variant.
+- **Model Checkpoint** — either a full path to a `.pt` / `.pth` / `.safetensors` file, or a Hugging Face repo id like `facebook/sam2.1-hiera-large`.
+
+**Segmentation:**
+
 - **Segmentation Type:**
-  - **Auto** — segments the entire image automatically.
-  - **Box** — segments objects within a rectangular selection.
-  - **Selection** — segments objects based on sample points from the current selection.
+  - **Auto** — segments the entire image.
+  - **Box** — segments objects inside a rectangular selection.
+  - **Selection** — segments objects seeded by sample points drawn from the current selection.
 - **Mask Type:**
   - **Multiple** — one layer per candidate mask.
-  - **Single** — only the highest-probability mask.
-- **Random Mask Color:** If checked, layers get random colors. Otherwise pick a fixed color.
+  - **Single** — only the highest-scoring mask.
+- **Selection Points** (Selection mode only) — how many seed points to sample from the current selection.
 
-#### SAM2-specific options (Auto segmentation)
+**SAM2-specific options (Auto segmentation):**
 
-- **Segmentation Resolution:** Density of the auto-segmentation grid. Higher = more masks, slower. (Low / Medium / High)
-- **Crop n Layers:** Run segmentation on overlapping crops. Improves accuracy on small objects.
-- **Minimum Mask Area:** Discards masks smaller than this area.
+- **Segmentation Resolution** — auto-segmentation grid density. Higher = more masks, slower.
+- **Crop n Layers** — run segmentation on overlapping crops for better small-object recall.
+- **Minimum Mask Area** — drop masks smaller than this many pixels.
+
+**Output:**
+
+- **Random Mask Color** / **Mask Color** — colorize each mask layer randomly, or with a single fixed color.
+- **Auto-select from top mask** (on by default) — after segmentation, hide the mask group and replace the GIMP selection with the best mask, so you can crop / copy / paint against it directly. Turn off to inspect all masks and pick one by hand.
+
+**Run Setup Check** — launches the bridge in test mode with the current interpreter and checkpoint and reports a checklist (python, torch + device, sam2, checkpoint loads, test inference passes). Failed checks surface the actionable hint from the translation table instead of a raw traceback. Use this first whenever a run fails.
 
 ### Workflow
 
-1. Pick your options and click OK.
-2. The plugin creates a layer group with one or more mask layers.
-3. Pick the mask layer for the object you want, then use Fuzzy Selection on it to turn the mask into a selection.
-4. Hide the mask group, switch back to the original image layer, and cut/copy/edit as usual.
+1. Pick your options (or load a preset) and click *OK*.
+2. The GIMP status bar shows progress: *Loading model…* (or the HF download warning on first run) → *Running … segmentation…*. The first segmentation pays the model-load cost; subsequent ones with the same checkpoint reuse the cached model and start in under a second.
+3. **Default (Auto-select on):** the mask group is hidden and the top mask is already selected as a GIMP selection. Crop, copy, paint behind, or convert to a layer mask as usual.
+4. **With Auto-select off:** the top mask layer is visible in a *Segment Anything – …* group; the other masks are created but hidden. Toggle visibility to pick a different one — layer names include their coverage percentage (`Mask - Box #1 (17.3%)`) to help.
 
 ---
 
 ## Troubleshooting
 
-**`ModuleNotFoundError: No module named 'cv2'`** — run `pip install opencv-python` in the SAM environment.
+**Click *Run Setup Check* first.** It translates most install-time errors (missing `sam2`, missing `huggingface_hub`, missing `cv2`, MPS OOM, checkpoint/config mismatch, network errors) into an actionable hint with the exact `pip install` line you need. Run-time failures in the main dialog go through the same translator, so the error dialog already tells you what to fix in almost every case.
 
-**`ModuleNotFoundError: No module named 'sam2'`** — SAM2 is not installed in the Python interpreter you pointed the plugin at. Verify with `which python` after `conda activate sam2`.
+If *Run Setup Check* doesn't help, the common less-obvious failure modes are:
 
-**`Torch not compiled with CUDA enabled` (macOS)** — make sure you are running this fork's `seganybridge.py`. The upstream version assumes CUDA.
-
-**`Cannot find primary config 'configs/sam2.1/...'`** — your installed `sam2` package is missing the 2.1 configs. Reinstall from a recent `facebookresearch/sam2` checkout.
-
-**`Unexpected key(s) in state_dict: no_obj_embed_spatial, ...`** — you are loading a SAM 2.1 checkpoint with SAM 2.0 configs. This fork auto-detects 2.1 from filename — make sure the file is named `sam2.1_*`.
-
-**`Placeholder storage has not been allocated on MPS device`** — known SAM2 issue on Apple Silicon. Workaround: force CPU by editing `seganybridge.py` (`device = "cpu"`). Slower but functional.
-
-**`Failed to build the SAM 2 CUDA extension`** — harmless on macOS.
-
-**GIMP does not list the plugin** — check `Edit → Preferences → Folders → Plug-ins`; the folder name must match the GIMP minor version (e.g. `3.2`). Make sure the `.py` files are executable on Linux/macOS.
+- **`Placeholder storage has not been allocated on MPS device`** — known SAM2/MPS issue on Apple Silicon. Workaround: force CPU by editing the top of `seganybridge.py`'s `_select_device()` to return `"cpu"`. Slower but always works.
+- **`Failed to build the SAM 2 CUDA extension`** during install — harmless on macOS; SAM2 falls back to its pure-PyTorch path.
+- **GIMP does not list the plugin** — check `Edit → Preferences → Folders → Plug-ins`. The installer places files under `…/GIMP/3.x/plug-ins/seganyplugin/`, where `3.x` must match GIMP's minor version. On Linux/macOS the `.py` files must be executable.
+- **Mask group is empty / only hidden layers** — you're on an older commit without the *Auto-select* default. Re-run `install.command` or copy the latest `seganyplugin.py` into the plug-ins folder.
