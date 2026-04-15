@@ -27,6 +27,7 @@ import numpy as np
 import cv2
 import sys
 import os
+import json
 
 # SAM2 imports
 from sam2.build_sam import build_sam2
@@ -142,7 +143,7 @@ class SAM1Strategy(SegmentationStrategy):
             )
             return None
 
-    def load_model(self, checkPtFilePath, modelType):
+    def load_model(self, checkPtFilePath, modelType, device):
         if sam_model_registry is None:
             print(
                 "Error: SAM1 is not installed. Install with: "
@@ -151,6 +152,7 @@ class SAM1Strategy(SegmentationStrategy):
             return None
         try:
             sam = sam_model_registry[modelType](checkpoint=checkPtFilePath)
+            sam.to(device=device)
             print("SAM1 Model loaded successfully!")
             return sam
         except Exception as e:
@@ -250,7 +252,7 @@ class SAM2Strategy(SegmentationStrategy):
             print(f"Error converting safetensors to pth: {e}")
             return False
 
-    def load_model(self, checkPtFilePath, modelType):
+    def load_model(self, checkPtFilePath, modelType, device):
         model_filename = os.path.basename(checkPtFilePath)
         is_sam21 = model_filename.startswith("sam2.1")
 
@@ -279,7 +281,6 @@ class SAM2Strategy(SegmentationStrategy):
                 print("Failed to convert safetensors file")
                 return None
         try:
-            device = "mps" if torch.backends.mps.is_available() else "cpu"
             sam = build_sam2(config_file, actual_checkpoint_path, device=device)
             print("SAM2 Model loaded successfully!")
             return sam
@@ -354,96 +355,150 @@ class SAM2Strategy(SegmentationStrategy):
             print(f"Removed temporary file: {self._temp_pth_path}")
 
 
-def main():
-    if len(sys.argv) < 3:
-        print(
-            "Usage: python seganybridge.py <model_type|auto> <checkpoint_path> [options]"
-        )
-        return
+def _select_device():
+    if torch.backends.mps.is_available():
+        return "mps"
+    if torch.cuda.is_available():
+        return "cuda"
+    return "cpu"
 
-    modelType = sys.argv[1]
-    checkPtFilePath = sys.argv[2]
-    model_filename = os.path.basename(checkPtFilePath)
 
-    if model_filename.lower().startswith("sam_"):
-        strategy = SAM1Strategy()
-    elif model_filename.lower().startswith("sam2"):
-        strategy = SAM2Strategy()
+def _print_device(device):
+    if device == "mps":
+        print("Model moved to MPS (Apple Silicon)")
+    elif device == "cuda":
+        print("Model moved to CUDA")
     else:
+        print("Model running on CPU")
+
+
+def _detect_strategy(model_filename):
+    name = model_filename.lower()
+    if name.startswith("sam_"):
+        return SAM1Strategy()
+    if name.startswith("sam2"):
+        return SAM2Strategy()
+    return None
+
+
+def _prepare_model(checkpoint_path, model_type):
+    model_filename = os.path.basename(checkpoint_path)
+    strategy = _detect_strategy(model_filename)
+    if strategy is None:
         print(
             f"Error: Could not determine model family from filename: {model_filename}"
         )
         print("Filename must start with 'sam_' for SAM1 or 'sam2' for SAM2.")
-        return
+        return None, None, None
 
-    if modelType.lower() == "auto":
-        modelType = strategy.get_model_type_from_filename(model_filename)
-        if not modelType:
-            return
+    if model_type.lower() == "auto":
+        model_type = strategy.get_model_type_from_filename(model_filename)
+        if not model_type:
+            return None, None, None
 
-    if not os.path.exists(checkPtFilePath):
-        print(f"Error: Checkpoint file not found: {checkPtFilePath}")
-        return
+    if not os.path.exists(checkpoint_path):
+        print(f"Error: Checkpoint file not found: {checkpoint_path}")
+        return None, None, None
 
-    sam = strategy.load_model(checkPtFilePath, modelType)
+    device = _select_device()
+    sam = strategy.load_model(checkpoint_path, model_type, device)
     if sam is None:
-        return
+        return None, None, None
+    _print_device(device)
+    return strategy, sam, device
 
-    if torch.backends.mps.is_available():
-        sam.to(device="mps")
-        print("Model moved to MPS (Apple Silicon)")
-    elif torch.cuda.is_available():
-        sam.to(device="cuda")
-        print("Model moved to CUDA")
 
-    if len(sys.argv) == 3:
-        strategy.run_test(sam)
-        print("Success!!")
+def _run_test(model_type, checkpoint_path):
+    strategy, sam, _ = _prepare_model(checkpoint_path, model_type)
+    if sam is None:
+        return 1
+    strategy.run_test(sam)
+    print("Success!!")
+    strategy.cleanup()
+    return 0
+
+
+def _run_job(params):
+    checkpoint_path = params["checkpoint_path"]
+    model_type = params.get("model_type", "auto")
+    image_path = params["image_path"]
+    seg_type = params["seg_type"]
+    mask_type = params.get("mask_type", "Multiple")
+    save_prefix = params["save_prefix"]
+    format_binary = params.get("format_binary", True)
+
+    strategy, sam, _ = _prepare_model(checkpoint_path, model_type)
+    if sam is None:
+        return 1
+
+    cvImage = cv2.imread(image_path)
+    if cvImage is None:
+        print(f"Error: could not read image: {image_path}")
         strategy.cleanup()
-        return
-
-    ipFile = sys.argv[3]
-    segType = sys.argv[4]
-    maskType = sys.argv[5]
-    saveFileNoExt = sys.argv[6]
-    formatBinary = sys.argv[7] == "True" if len(sys.argv) > 7 else True
-
-    cvImage = cv2.imread(ipFile)
+        return 1
     cvImage = cv2.cvtColor(cvImage, cv2.COLOR_BGR2RGB)
 
     try:
-        if segType == "Auto":
+        if seg_type == "Auto":
             auto_kwargs = {}
             if isinstance(strategy, SAM2Strategy):
-                if len(sys.argv) > 8:
-                    auto_kwargs["segRes"] = sys.argv[8]
-                if len(sys.argv) > 9:
-                    auto_kwargs["cropNLayers"] = int(sys.argv[9])
-                if len(sys.argv) > 10:
-                    auto_kwargs["minMaskArea"] = int(sys.argv[10])
+                if "seg_res" in params:
+                    auto_kwargs["segRes"] = params["seg_res"]
+                if "crop_n_layers" in params:
+                    auto_kwargs["cropNLayers"] = int(params["crop_n_layers"])
+                if "min_mask_area" in params:
+                    auto_kwargs["minMaskArea"] = int(params["min_mask_area"])
             strategy.segment_auto(
-                sam, cvImage, saveFileNoExt, formatBinary, **auto_kwargs
+                sam, cvImage, save_prefix, format_binary, **auto_kwargs
             )
-        elif segType in {"Selection", "Box-Selection"}:
-            selFile = sys.argv[8]
-            boxCos = (
-                [float(val.strip()) for val in sys.argv[9].split(",")]
-                if len(sys.argv) > 9
-                else None
-            )
+        elif seg_type in {"Selection", "Box-Selection"}:
+            sel_file = params["sel_file"]
+            box_coords = params.get("box_coords")
             strategy.segment_sel(
-                sam, cvImage, maskType, selFile, boxCos, saveFileNoExt, formatBinary
+                sam,
+                cvImage,
+                mask_type,
+                sel_file,
+                box_coords,
+                save_prefix,
+                format_binary,
             )
-        elif segType == "Box":
-            boxCos = [float(val.strip()) for val in sys.argv[9].split(",")]
+        elif seg_type == "Box":
+            box_coords = params["box_coords"]
             strategy.segment_box(
-                sam, cvImage, maskType, boxCos, saveFileNoExt, formatBinary
+                sam, cvImage, mask_type, box_coords, save_prefix, format_binary
             )
         else:
-            print(f"Unknown segmentation type: {segType}")
+            print(f"Unknown segmentation type: {seg_type}")
+            return 1
     finally:
         print("Done!")
         strategy.cleanup()
+    return 0
+
+
+def main():
+    # Test mode (preserves the README test command):
+    #   python seganybridge.py <model_type|auto> <checkpoint_path>
+    if len(sys.argv) == 3:
+        sys.exit(_run_test(sys.argv[1], sys.argv[2]))
+
+    # Full job mode: read a JSON parameter blob from stdin.
+    if len(sys.argv) != 1:
+        print("Usage:")
+        print("  python seganybridge.py                                  "
+              "# JSON job from stdin")
+        print("  python seganybridge.py <model_type|auto> <checkpoint>   "
+              "# backend test")
+        sys.exit(2)
+
+    try:
+        params = json.load(sys.stdin)
+    except json.JSONDecodeError as e:
+        print(f"Error: invalid JSON on stdin: {e}")
+        sys.exit(2)
+
+    sys.exit(_run_job(params))
 
 
 if __name__ == "__main__":
