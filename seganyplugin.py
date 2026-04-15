@@ -19,6 +19,7 @@ from gi.repository import GLib
 
 import tempfile
 import subprocess
+import shutil
 from os.path import exists
 from array import array
 import random
@@ -28,6 +29,28 @@ import glob
 import struct
 import json
 import logging
+
+
+def _parse_int(text, default):
+    try:
+        return int(str(text).strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def _default_python_search_dir():
+    """Best-guess start directory for the python interpreter file picker."""
+    for candidate in (
+        "/opt/miniconda3/envs",
+        os.path.expanduser("~/miniconda3/envs"),
+        os.path.expanduser("~/anaconda3/envs"),
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        "/usr/bin",
+    ):
+        if os.path.isdir(candidate):
+            return candidate
+    return None
 
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
@@ -113,7 +136,9 @@ class OptionsDialog(Gtk.Dialog):
         # Python Path
         pythonFileLbl = Gtk.Label(label="Python3 Path:", xalign=1)
         self.pythonPathBox, self.pythonPathEntry = self._create_path_chooser(
-            "Select Python Path", self.values.pythonPath
+            "Select Python Path",
+            self.values.pythonPath,
+            default_folder=_default_python_search_dir(),
         )
         grid.attach(pythonFileLbl, 0, 0, 1, 1)
         grid.attach(self.pythonPathBox, 1, 0, 1, 1)
@@ -227,7 +252,9 @@ class OptionsDialog(Gtk.Dialog):
 
         self.show_all()
 
-    def _create_path_chooser(self, title, initial_path=None, is_folder=False):
+    def _create_path_chooser(
+        self, title, initial_path=None, is_folder=False, default_folder=None
+    ):
         """Combined Entry + Browse button so paths can be typed/pasted or picked."""
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
 
@@ -257,8 +284,13 @@ class OptionsDialog(Gtk.Dialog):
                 Gtk.ResponseType.OK,
             )
             current = entry.get_text()
+            start_folder = None
             if current and os.path.exists(os.path.dirname(current)):
-                dialog.set_current_folder(os.path.dirname(current))
+                start_folder = os.path.dirname(current)
+            elif default_folder and os.path.isdir(default_folder):
+                start_folder = default_folder
+            if start_folder:
+                dialog.set_current_folder(start_folder)
             # ~/Library is hidden by default on macOS
             dialog.set_show_hidden(True)
             response = dialog.run()
@@ -331,10 +363,14 @@ class OptionsDialog(Gtk.Dialog):
                 int(rgba.blue * 255),
                 255,
             ]
-        self.values.selPtCnt = int(self.selPtsEntry.get_text())
+        self.values.selPtCnt = _parse_int(
+            self.selPtsEntry.get_text(), self.values.selPtCnt
+        )
         self.values.segRes = self.segResVals[self.segResDropDown.get_active()]
         self.values.cropNLayers = 1 if self.cropNLayersChk.get_active() else 0
-        self.values.minMaskArea = int(self.minMaskAreaEntry.get_text())
+        self.values.minMaskArea = _parse_int(
+            self.minMaskAreaEntry.get_text(), self.values.minMaskArea
+        )
         self.values.persist(self.configFilePath)
 
         # Return a copy with the parsed model type for the bridge script
@@ -351,46 +387,36 @@ def getPathDict(image):
     return {}
 
 
-def shellRun(cmdArgs, stdoutFile=None, env_vars=None, useos=False):
+def bridgeRun(pythonPath, scriptPath, params, env_vars=None):
+    """Invoke the bridge with a JSON parameter blob on stdin.
+
+    Returns (success, stderr_text).
+    """
     if env_vars is None:
         env_vars = os.environ.copy()
 
-    cmdLine = " ".join(cmdArgs)
-    logging.info("Running command: %s" % cmdLine)
-    if useos:
-        os.system(cmdLine)
-    else:
+    payload = json.dumps(params)
+    logging.info("Running bridge: %s %s", pythonPath, scriptPath)
+    try:
         process = subprocess.Popen(
-            cmdArgs,
+            [pythonPath, scriptPath],
             env=env_vars,
-            stdout=subprocess.PIPE if not stdoutFile else stdoutFile,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-        try:
-            # Processing stdout
-            if process.stdout:
-                for line in iter(process.stdout.readline, b""):
-                    # Decode the line if necessary (Python 3 reads bytes from PIPE)
-                    line = line.decode("utf-8")
-                    print(
-                        line,
-                    )
-            process.wait()
+    except FileNotFoundError as e:
+        return False, f"Could not launch python interpreter: {e}"
 
-            if process.returncode != 0:
-                error_message = "Command failed with the following error:\n "
-                error_lines = [
-                    line.decode("utf-8") for line in iter(process.stderr.readline, b"")
-                ]
-                logging.error(error_message + "".join(error_lines))
-                return False
-
-        finally:
-            if process.stdout:
-                process.stdout.close()
-            if process.stderr:
-                process.stderr.close()
-    return True
+    stdout, stderr = process.communicate(input=payload.encode("utf-8"))
+    if stdout:
+        for line in stdout.decode("utf-8", errors="replace").splitlines():
+            print(line)
+    stderr_text = stderr.decode("utf-8", errors="replace") if stderr else ""
+    if process.returncode != 0:
+        logging.error("Bridge failed (rc=%s):\n%s", process.returncode, stderr_text)
+        return False, stderr_text or f"Bridge exited with code {process.returncode}"
+    return True, stderr_text
 
 
 def unpackBoolArray(filepath):
@@ -581,6 +607,23 @@ def showError(message):
 
 
 def validateOptions(image, values):
+    if not values.checkPtPath or not os.path.exists(values.checkPtPath):
+        showError(
+            "Checkpoint path is not set or does not exist:\n"
+            + (values.checkPtPath or "(empty)")
+        )
+        return False
+
+    pythonPath = values.pythonPath or "python"
+    if not (os.path.isabs(pythonPath) and os.path.exists(pythonPath)):
+        if shutil.which(pythonPath) is None:
+            showError(
+                "Python interpreter not found:\n"
+                + pythonPath
+                + "\n\nSet the full path in the Python3 Path field."
+            )
+            return False
+
     if values.segType in {"Selection", "Box"}:
         procedure = Gimp.get_pdb().lookup_procedure("gimp-selection-is-empty")
         config = procedure.create_config()
@@ -610,17 +653,7 @@ def run_segmentation(image, values):
     if not validateOptions(image, values):
         return
 
-    boxPathDict = getPathDict(image)
-
-    if values.checkPtPath is None:
-        logging.error("Please set the Segment Anything checkpoint path.")
-        return
-
-    if values.pythonPath is None:
-        logging.warn("Warning: python path is None trying default python executable")
-        pythonPath = "python"
-    else:
-        pythonPath = values.pythonPath
+    pythonPath = values.pythonPath or "python"
 
     formatBinary = True
     filePrefix = "__seg__"
@@ -628,44 +661,37 @@ def run_segmentation(image, values):
     selFile = filepathPrefix + "sel__.txt"
     maskFileNoExt = filepathPrefix + "mask__"
 
-    segAnyScriptName = "seganybridge.py"
-
     cleanup(filepathPrefix)
 
     currDir = os.path.dirname(os.path.realpath(__file__))
-    scriptFilepath = os.path.join(currDir, segAnyScriptName)
+    scriptFilepath = os.path.join(currDir, "seganybridge.py")
 
     ipFilePath = filepathPrefix + next(tempfile._get_candidate_names()) + ".png"
 
-    cmd = [
-        pythonPath,
-        scriptFilepath,
-        values.modelType,
-        values.checkPtPath,
-        ipFilePath,
-        values.segType,
-        values.maskType,
-        maskFileNoExt,
-        str(formatBinary),
-    ]
+    params = {
+        "checkpoint_path": values.checkPtPath,
+        "model_type": values.modelType,
+        "image_path": ipFilePath,
+        "seg_type": values.segType,
+        "mask_type": values.maskType,
+        "save_prefix": maskFileNoExt,
+        "format_binary": formatBinary,
+    }
 
     if values.segType == "Auto":
-        # Only add SAM2-specific args if the model is not SAM1
-        # The bridge script knows to ignore them, but this is cleaner.
         isSam1_by_type = values.modelType in ["vit_h", "vit_l", "vit_b"]
         isSam1_by_filename = (
             values.modelType == "auto"
             and values.checkPtPath
             and os.path.basename(values.checkPtPath).lower().startswith("sam_")
         )
-        isSam1 = isSam1_by_type or isSam1_by_filename
-        if not isSam1:
-            cmd.extend(
-                [values.segRes, str(values.cropNLayers), str(values.minMaskArea)]
-            )
+        if not (isSam1_by_type or isSam1_by_filename):
+            params["seg_res"] = values.segRes
+            params["crop_n_layers"] = values.cropNLayers
+            params["min_mask_area"] = values.minMaskArea
 
     newImage = image.duplicate()
-    visLayer = newImage.merge_visible_layers(Gimp.MergeType.CLIP_TO_IMAGE)
+    newImage.merge_visible_layers(Gimp.MergeType.CLIP_TO_IMAGE)
 
     procedure = Gimp.get_pdb().lookup_procedure("file-png-export")
     config = procedure.create_config()
@@ -692,9 +718,9 @@ def run_segmentation(image, values):
     result = procedure.run(config)
     channel = result.index(1)
 
-    if values.segType in {"Selection"}:
+    if values.segType == "Selection":
         exportSelection(image, selFile, values.selPtCnt)
-        cmd.append(selFile)
+        params["sel_file"] = selFile
     elif values.segType == "Box":
         procedure = Gimp.get_pdb().lookup_procedure("gimp-selection-bounds")
         config = procedure.create_config()
@@ -704,14 +730,26 @@ def run_segmentation(image, values):
         y1 = result.index(3)
         x2 = result.index(4)
         y2 = result.index(5)
-        cmd.append("sel_place_holder")
-        cmd.append(",".join(str(co) for co in [x1, y1, x2, y2]))
+        params["box_coords"] = [x1, y1, x2, y2]
 
     procedure = Gimp.get_pdb().lookup_procedure("gimp-selection-none")
     config = procedure.create_config()
     config.set_property("image", image)
     procedure.run(config)
-    shellRun(cmd)
+
+    Gimp.progress_init("Running Segment Anything…")
+    try:
+        success, stderr_text = bridgeRun(pythonPath, scriptFilepath, params)
+    finally:
+        Gimp.progress_end()
+
+    if not success:
+        cleanup(filepathPrefix)
+        showError(
+            "Segment Anything bridge failed:\n\n"
+            + (stderr_text.strip() or "(no stderr)")
+        )
+        return
 
     layerMaskColor = None if values.isRandomColor else values.maskColor
     createLayers(image, maskFileNoExt, layerMaskColor, formatBinary, values)
