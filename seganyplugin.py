@@ -112,11 +112,11 @@ class OptionsDialog(Gtk.Dialog):
 
         # Python Path
         pythonFileLbl = Gtk.Label(label="Python3 Path:", xalign=1)
-        self.pythonFileBtn = Gtk.FileChooserButton(title="Select Python Path")
-        if self.values.pythonPath is not None:
-            self.pythonFileBtn.set_filename(self.values.pythonPath)
+        self.pythonPathBox, self.pythonPathEntry = self._create_path_chooser(
+            "Select Python Path", self.values.pythonPath
+        )
         grid.attach(pythonFileLbl, 0, 0, 1, 1)
-        grid.attach(self.pythonFileBtn, 1, 0, 1, 1)
+        grid.attach(self.pythonPathBox, 1, 0, 1, 1)
 
         # Model Type
         modelTypeLbl = Gtk.Label(label="Model Type:", xalign=1)
@@ -147,13 +147,11 @@ class OptionsDialog(Gtk.Dialog):
         checkPtFileLbl = Gtk.Label(
             label="Model Checkpoint (.pth/.safetensors):", xalign=1
         )
-        self.checkPtFileBtn = Gtk.FileChooserButton(
-            title="Select Model Checkpoint Path"
+        self.checkPtPathBox, self.checkPtPathEntry = self._create_path_chooser(
+            "Select Model Checkpoint Path", self.values.checkPtPath
         )
-        if self.values.checkPtPath is not None:
-            self.checkPtFileBtn.set_filename(self.values.checkPtPath)
         grid.attach(checkPtFileLbl, 0, 2, 1, 1)
-        grid.attach(self.checkPtFileBtn, 1, 2, 1, 1)
+        grid.attach(self.checkPtPathBox, 1, 2, 1, 1)
 
         # Segmentation Type
         segTypeLbl = Gtk.Label(label="Segmentation Type:", xalign=1)
@@ -223,11 +221,55 @@ class OptionsDialog(Gtk.Dialog):
         self.connect("map-event", self.on_map_event)
         self.segTypeDropDown.connect("changed", self.update_options_visibility)
         self.modelTypeDropDown.connect("changed", self.update_options_visibility)
-        self.checkPtFileBtn.connect("file-set", self.update_options_visibility)
+        self.checkPtPathEntry.connect("changed", self.update_options_visibility)
         if not self.isGrayScale:
             self.randColBtn.connect("toggled", self.on_random_toggled)
 
         self.show_all()
+
+    def _create_path_chooser(self, title, initial_path=None, is_folder=False):
+        """Combined Entry + Browse button so paths can be typed/pasted or picked."""
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+
+        entry = Gtk.Entry()
+        entry.set_hexpand(True)
+        if initial_path:
+            entry.set_text(initial_path)
+        box.pack_start(entry, True, True, 0)
+
+        button = Gtk.Button(label="Browse…")
+
+        def on_browse(widget):
+            action = (
+                Gtk.FileChooserAction.SELECT_FOLDER
+                if is_folder
+                else Gtk.FileChooserAction.OPEN
+            )
+            dialog = Gtk.FileChooserDialog(
+                title=title,
+                parent=self,
+                action=action,
+            )
+            dialog.add_buttons(
+                Gtk.STOCK_CANCEL,
+                Gtk.ResponseType.CANCEL,
+                Gtk.STOCK_OPEN,
+                Gtk.ResponseType.OK,
+            )
+            current = entry.get_text()
+            if current and os.path.exists(os.path.dirname(current)):
+                dialog.set_current_folder(os.path.dirname(current))
+            # ~/Library is hidden by default on macOS
+            dialog.set_show_hidden(True)
+            response = dialog.run()
+            if response == Gtk.ResponseType.OK:
+                entry.set_text(dialog.get_filename())
+            dialog.destroy()
+
+        button.connect("clicked", on_browse)
+        box.pack_start(button, False, False, 0)
+
+        return box, entry
 
     def update_options_visibility(self, widget):
         segType = self.segTypeVals[self.segTypeDropDown.get_active()]
@@ -236,7 +278,7 @@ class OptionsDialog(Gtk.Dialog):
         isAuto = segType == "Auto"
 
         # Determine if SAM1 is being used
-        checkpoint_path = self.checkPtFileBtn.get_filename()
+        checkpoint_path = self.checkPtPathEntry.get_text().strip() or None
         isSam1_by_filename = (
             modelType == "Auto"
             and checkpoint_path
@@ -270,12 +312,14 @@ class OptionsDialog(Gtk.Dialog):
             self.on_random_toggled(self.randColBtn)
 
     def get_values(self):
-        self.values.pythonPath = self.pythonFileBtn.get_filename()
+        python_path = self.pythonPathEntry.get_text().strip()
+        self.values.pythonPath = python_path if python_path else None
 
         # Persist the full model type string for UI restoration
         self.values.modelType = self.modelTypeVals[self.modelTypeDropDown.get_active()]
 
-        self.values.checkPtPath = self.checkPtFileBtn.get_filename()
+        checkpoint_path = self.checkPtPathEntry.get_text().strip()
+        self.values.checkPtPath = checkpoint_path if checkpoint_path else None
         self.values.segType = self.segTypeVals[self.segTypeDropDown.get_active()]
         self.values.maskType = self.maskTypeVals[self.maskTypeDropDown.get_active()]
         if hasattr(self, "randColBtn"):
