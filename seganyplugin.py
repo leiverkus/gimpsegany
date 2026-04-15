@@ -224,6 +224,7 @@ class DialogValue:
         self.segRes = "Medium"
         self.cropNLayers = 0
         self.minMaskArea = 0
+        self.autoSelectTopMask = True
 
         try:
             with open(filepath, "r") as f:
@@ -240,6 +241,9 @@ class DialogValue:
                 self.segRes = data.get("segRes", self.segRes)
                 self.cropNLayers = data.get("cropNLayers", self.cropNLayers)
                 self.minMaskArea = data.get("minMaskArea", self.minMaskArea)
+                self.autoSelectTopMask = data.get(
+                    "autoSelectTopMask", self.autoSelectTopMask
+                )
         except Exception as e:
             logging.info("Error reading json : %s" % e)
 
@@ -257,6 +261,7 @@ class DialogValue:
             "segRes": self.segRes,
             "cropNLayers": self.cropNLayers,
             "minMaskArea": self.minMaskArea,
+            "autoSelectTopMask": self.autoSelectTopMask,
         }
         with open(filepath, "w") as f:
             json.dump(data, f)
@@ -406,6 +411,13 @@ class OptionsDialog(Gtk.Dialog):
             self.maskColorBtn.set_rgba(rgba)
             grid.attach(self.maskColorLbl, 0, 11, 1, 1)
             grid.attach(self.maskColorBtn, 1, 11, 1, 1)
+
+        # Auto-select top mask: after segmentation, convert the best mask
+        # into a GIMP selection and hide the mask group so the user can
+        # immediately operate on it (crop, copy, paint behind, etc.).
+        self.autoSelectChk = Gtk.CheckButton(label="Auto-select from top mask")
+        self.autoSelectChk.set_active(self.values.autoSelectTopMask)
+        grid.attach(self.autoSelectChk, 1, 12, 1, 1)
 
         self.connect("map-event", self.on_map_event)
         self.segTypeDropDown.connect("changed", self.update_options_visibility)
@@ -613,6 +625,7 @@ class OptionsDialog(Gtk.Dialog):
         self.values.minMaskArea = _parse_int(
             self.minMaskAreaEntry.get_text(), self.values.minMaskArea
         )
+        self.values.autoSelectTopMask = self.autoSelectChk.get_active()
         self.values.persist(self.configFilePath)
 
         # Return a copy with the parsed model type for the bridge script
@@ -873,6 +886,7 @@ def getRandomColor(layerCnt):
 
 def createLayers(image, maskFileNoExt, userSelColor, formatBinary, values):
     width, height = image.get_width(), image.get_height()
+    total_pixels = max(width * height, 1)
 
     idx = 0
     maxLayers = 99999
@@ -894,6 +908,8 @@ def createLayers(image, maskFileNoExt, userSelColor, formatBinary, values):
         babl_format = "RGBA u8"
         pix_size = 4
 
+    top_layer = None  # first mask created (SAM ranks by score, so it's the best)
+
     while idx < maxLayers:
         filepath = maskFileNoExt + str(idx) + ".seg"
         if exists(filepath):
@@ -909,7 +925,6 @@ def createLayers(image, maskFileNoExt, userSelColor, formatBinary, values):
             )
             buffer = newlayer.get_buffer()
             image.insert_layer(newlayer, parent, 0)
-            newlayer.set_visible(False)
 
             rect = Gegl.Rectangle.new(0, 0, width, height)
 
@@ -923,10 +938,12 @@ def createLayers(image, maskFileNoExt, userSelColor, formatBinary, values):
             mask_color_bytes = bytes(maskColor)
             transparent_pixel = bytes(pix_size)
             row_byte_strings = []
+            white_pixels = 0
             for row in maskVals:
                 row_pixels = []
                 for p in row:
                     if p:
+                        white_pixels += 1
                         row_pixels.append(mask_color_bytes)
                     else:
                         row_pixels.append(transparent_pixel)
@@ -935,13 +952,27 @@ def createLayers(image, maskFileNoExt, userSelColor, formatBinary, values):
 
             buffer.set(rect, babl_format, pixels)
 
+            # Rename to include coverage so the layer list is self-describing
+            # and easy to sort/pick from — the top mask isn't always #1.
+            coverage_pct = (white_pixels / total_pixels) * 100.0
+            newlayer.set_name(
+                f"Mask - {values.segType} #{idx + 1} ({coverage_pct:.1f}%)"
+            )
+
+            # Hide all masks except the first (best-scoring) one so the user
+            # sees something immediately instead of an empty layer group.
+            if idx == 0:
+                top_layer = newlayer
+            else:
+                newlayer.set_visible(False)
+
             idx += 1
             newlayer.update(0, 0, width, height)
         else:
             break
     # Gimp.displays_flush()  # turn on only if needed
 
-    return idx
+    return idx, parent, top_layer
 
 
 def cleanup(filepathPrefix):
@@ -1128,10 +1159,25 @@ def run_segmentation(image, values):
         return
 
     layerMaskColor = None if values.isRandomColor else values.maskColor
-    createLayers(image, maskFileNoExt, layerMaskColor, formatBinary, values)
+    _count, parent_group, top_layer = createLayers(
+        image, maskFileNoExt, layerMaskColor, formatBinary, values
+    )
     cleanup(filepathPrefix)
 
-    if channel is not None:
+    if values.autoSelectTopMask and top_layer is not None:
+        # Convert the top mask directly into a GIMP selection and hide the
+        # overlay group so the user can immediately crop/copy/paint — this
+        # is what most people want to do with the result anyway. We
+        # deliberately skip restoring the pre-run selection (saved in
+        # `channel`) because the new selection is more useful.
+        parent_group.set_visible(False)
+        procedure = Gimp.get_pdb().lookup_procedure("gimp-image-select-item")
+        config = procedure.create_config()
+        config.set_property("image", image)
+        config.set_property("operation", Gimp.ChannelOps.REPLACE)
+        config.set_property("item", top_layer)
+        procedure.run(config)
+    elif channel is not None:
         procedure = Gimp.get_pdb().lookup_procedure("gimp-image-select-item")
         config = procedure.create_config()
         config.set_property("image", image)
