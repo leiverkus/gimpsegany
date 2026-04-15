@@ -225,6 +225,7 @@ class DialogValue:
         self.cropNLayers = 0
         self.minMaskArea = 0
         self.autoSelectTopMask = True
+        self.presets = {}  # name -> dict of option values (see _capture_preset)
 
         try:
             with open(filepath, "r") as f:
@@ -244,6 +245,9 @@ class DialogValue:
                 self.autoSelectTopMask = data.get(
                     "autoSelectTopMask", self.autoSelectTopMask
                 )
+                loaded_presets = data.get("presets")
+                if isinstance(loaded_presets, dict):
+                    self.presets = loaded_presets
         except Exception as e:
             logging.info("Error reading json : %s" % e)
 
@@ -262,6 +266,7 @@ class DialogValue:
             "cropNLayers": self.cropNLayers,
             "minMaskArea": self.minMaskArea,
             "autoSelectTopMask": self.autoSelectTopMask,
+            "presets": self.presets,
         }
         with open(filepath, "w") as f:
             json.dump(data, f)
@@ -282,6 +287,25 @@ class OptionsDialog(Gtk.Dialog):
         self.configFilePath = os.path.join(scriptDir, "segany_settings.json")
 
         self.values = DialogValue(self.configFilePath)
+
+        # Preset bar lives above the options grid so preset switching
+        # doesn't visually sit in the middle of the option flow.
+        self._preset_sentinel = "— no preset —"
+        preset_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+        preset_box.set_margin_start(10)
+        preset_box.set_margin_end(10)
+        preset_box.set_margin_top(10)
+        preset_box.set_margin_bottom(0)
+        preset_box.pack_start(Gtk.Label(label="Preset:"), False, False, 0)
+        self.presetDropDown = Gtk.ComboBoxText()
+        self.presetDropDown.set_hexpand(True)
+        self._rebuild_preset_dropdown()
+        preset_box.pack_start(self.presetDropDown, True, True, 0)
+        self.presetSaveBtn = Gtk.Button(label="Save as…")
+        preset_box.pack_start(self.presetSaveBtn, False, False, 0)
+        self.presetDeleteBtn = Gtk.Button(label="Delete")
+        preset_box.pack_start(self.presetDeleteBtn, False, False, 0)
+        self.get_content_area().pack_start(preset_box, False, False, 0)
 
         grid = Gtk.Grid()
         grid.set_column_spacing(10)
@@ -431,6 +455,9 @@ class OptionsDialog(Gtk.Dialog):
         self.modelTypeDropDown.connect("changed", self.update_options_visibility)
         self.checkPtPathEntry.connect("changed", self.update_options_visibility)
         self.modelSourceDropDown.connect("changed", self.on_model_source_changed)
+        self.presetDropDown.connect("changed", self.on_preset_changed)
+        self.presetSaveBtn.connect("clicked", self.on_save_preset_clicked)
+        self.presetDeleteBtn.connect("clicked", self.on_delete_preset_clicked)
         if not self.isGrayScale:
             self.randColBtn.connect("toggled", self.on_random_toggled)
 
@@ -691,6 +718,167 @@ class OptionsDialog(Gtk.Dialog):
             )
         dlg.run()
         dlg.destroy()
+
+    # ---- Preset handling ------------------------------------------------
+
+    def _rebuild_preset_dropdown(self):
+        """Reload the preset combo from ``self.values.presets``."""
+        self.presetDropDown.remove_all()
+        self.presetDropDown.append_text(self._preset_sentinel)
+        for name in sorted(self.values.presets.keys()):
+            self.presetDropDown.append_text(name)
+        self.presetDropDown.set_active(0)
+
+    def _capture_preset(self):
+        """Snapshot current widget state into a dict for storage as a preset.
+
+        pythonPath is deliberately excluded: it's a machine-level setting,
+        shared presets shouldn't change which interpreter runs.
+        """
+        data = {
+            "modelType": self.modelTypeVals[self.modelTypeDropDown.get_active()],
+            "checkPtPath": self.checkPtPathEntry.get_text().strip() or None,
+            "modelSource": None,
+            "segType": self.segTypeVals[self.segTypeDropDown.get_active()],
+            "maskType": self.maskTypeVals[self.maskTypeDropDown.get_active()],
+            "selPtCnt": _parse_int(self.selPtsEntry.get_text(), self.values.selPtCnt),
+            "segRes": self.segResVals[self.segResDropDown.get_active()],
+            "cropNLayers": 1 if self.cropNLayersChk.get_active() else 0,
+            "minMaskArea": _parse_int(
+                self.minMaskAreaEntry.get_text(), self.values.minMaskArea
+            ),
+            "autoSelectTopMask": self.autoSelectChk.get_active(),
+        }
+        source_idx = self.modelSourceDropDown.get_active()
+        if source_idx > 0:
+            label, hf_id, _mt = HF_MODELS[source_idx]
+            if hf_id == data["checkPtPath"]:
+                data["modelSource"] = label
+        if hasattr(self, "randColBtn"):
+            data["isRandomColor"] = self.randColBtn.get_active()
+            rgba = self.maskColorBtn.get_rgba()
+            data["maskColor"] = [
+                int(rgba.red * 255),
+                int(rgba.green * 255),
+                int(rgba.blue * 255),
+                255,
+            ]
+        return data
+
+    def _apply_preset(self, data):
+        """Push a preset dict back into the dialog widgets."""
+        # Model source first so its cascade fills path + model type, then
+        # explicit values from the preset override the cascade if present.
+        source_label = data.get("modelSource")
+        source_idx = 0
+        if source_label:
+            for i, (lbl, _hf, _mt) in enumerate(HF_MODELS):
+                if lbl == source_label:
+                    source_idx = i
+                    break
+        self.modelSourceDropDown.set_active(source_idx)
+
+        if data.get("checkPtPath") is not None:
+            self.checkPtPathEntry.set_text(data["checkPtPath"])
+        model_type = data.get("modelType")
+        if model_type in self.modelTypeVals:
+            self.modelTypeDropDown.set_active(self.modelTypeVals.index(model_type))
+
+        seg_type = data.get("segType")
+        if seg_type in self.segTypeVals:
+            self.segTypeDropDown.set_active(self.segTypeVals.index(seg_type))
+        mask_type = data.get("maskType")
+        if mask_type in self.maskTypeVals:
+            self.maskTypeDropDown.set_active(self.maskTypeVals.index(mask_type))
+
+        if "selPtCnt" in data:
+            self.selPtsEntry.set_text(str(data["selPtCnt"]))
+        seg_res = data.get("segRes")
+        if seg_res in self.segResVals:
+            self.segResDropDown.set_active(self.segResVals.index(seg_res))
+        if "cropNLayers" in data:
+            self.cropNLayersChk.set_active(bool(data["cropNLayers"]))
+        if "minMaskArea" in data:
+            self.minMaskAreaEntry.set_text(str(data["minMaskArea"]))
+        if "autoSelectTopMask" in data:
+            self.autoSelectChk.set_active(bool(data["autoSelectTopMask"]))
+
+        if hasattr(self, "randColBtn"):
+            if "isRandomColor" in data:
+                self.randColBtn.set_active(bool(data["isRandomColor"]))
+            if "maskColor" in data and isinstance(data["maskColor"], list):
+                mc = data["maskColor"]
+                if len(mc) >= 3:
+                    rgba = Gdk.RGBA()
+                    rgba.parse(f"rgb({mc[0]},{mc[1]},{mc[2]})")
+                    self.maskColorBtn.set_rgba(rgba)
+
+        self.update_options_visibility(None)
+        if hasattr(self, "randColBtn"):
+            self.on_random_toggled(self.randColBtn)
+
+    def _prompt_name(self, title, default=""):
+        """Tiny modal asking for a string. Returns str or None on cancel."""
+        dlg = Gtk.Dialog(title=title, transient_for=self, flags=Gtk.DialogFlags.MODAL)
+        dlg.add_buttons(
+            Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
+            Gtk.STOCK_OK, Gtk.ResponseType.OK,
+        )
+        entry = Gtk.Entry()
+        entry.set_text(default)
+        entry.set_activates_default(True)
+        entry.set_width_chars(30)
+        box = dlg.get_content_area()
+        box.set_spacing(10)
+        box.set_margin_start(10)
+        box.set_margin_end(10)
+        box.set_margin_top(10)
+        box.set_margin_bottom(10)
+        box.pack_start(entry, False, False, 0)
+        dlg.set_default_response(Gtk.ResponseType.OK)
+        dlg.show_all()
+        resp = dlg.run()
+        name = entry.get_text().strip() if resp == Gtk.ResponseType.OK else None
+        dlg.destroy()
+        return name or None
+
+    def on_preset_changed(self, widget):
+        idx = self.presetDropDown.get_active()
+        if idx <= 0:
+            return  # sentinel — leave widgets alone
+        name = self.presetDropDown.get_active_text()
+        preset = self.values.presets.get(name)
+        if preset is not None:
+            self._apply_preset(preset)
+
+    def on_save_preset_clicked(self, widget):
+        current = self.presetDropDown.get_active_text() or ""
+        if current == self._preset_sentinel:
+            current = ""
+        name = self._prompt_name("Save preset", default=current)
+        if not name:
+            return
+        self.values.presets[name] = self._capture_preset()
+        # Persist right away — users expect Save as… to stick even if they
+        # later cancel the main dialog.
+        self.values.persist(self.configFilePath)
+        self._rebuild_preset_dropdown()
+        # Re-select the just-saved preset. Values already match the widgets,
+        # so the resulting on_preset_changed re-apply is a no-op.
+        for i in range(self.presetDropDown.get_model().iter_n_children(None)):
+            self.presetDropDown.set_active(i)
+            if self.presetDropDown.get_active_text() == name:
+                break
+
+    def on_delete_preset_clicked(self, widget):
+        idx = self.presetDropDown.get_active()
+        if idx <= 0:
+            return
+        name = self.presetDropDown.get_active_text()
+        if name in self.values.presets:
+            del self.values.presets[name]
+            self.values.persist(self.configFilePath)
+        self._rebuild_preset_dropdown()
 
     def on_map_event(self, widget, event):
         self.update_options_visibility(None)
