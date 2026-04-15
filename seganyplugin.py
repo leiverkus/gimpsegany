@@ -225,6 +225,7 @@ class DialogValue:
         self.cropNLayers = 0
         self.minMaskArea = 0
         self.autoSelectTopMask = True
+        self.showAllMasks = True
         self.presets = {}  # name -> dict of option values (see _capture_preset)
 
         try:
@@ -245,6 +246,7 @@ class DialogValue:
                 self.autoSelectTopMask = data.get(
                     "autoSelectTopMask", self.autoSelectTopMask
                 )
+                self.showAllMasks = data.get("showAllMasks", self.showAllMasks)
                 loaded_presets = data.get("presets")
                 if isinstance(loaded_presets, dict):
                     self.presets = loaded_presets
@@ -266,6 +268,7 @@ class DialogValue:
             "cropNLayers": self.cropNLayers,
             "minMaskArea": self.minMaskArea,
             "autoSelectTopMask": self.autoSelectTopMask,
+            "showAllMasks": self.showAllMasks,
             "presets": self.presets,
         }
         with open(filepath, "w") as f:
@@ -443,12 +446,19 @@ class OptionsDialog(Gtk.Dialog):
         self.autoSelectChk.set_active(self.values.autoSelectTopMask)
         grid.attach(self.autoSelectChk, 1, 12, 1, 1)
 
+        # Show all masks: keep every generated mask layer visible instead
+        # of hiding all but #1. Overrides the hide-group step of the
+        # auto-select flow too, so the colored overlay stays on screen.
+        self.showAllMasksChk = Gtk.CheckButton(label="Show all masks")
+        self.showAllMasksChk.set_active(self.values.showAllMasks)
+        grid.attach(self.showAllMasksChk, 1, 13, 1, 1)
+
         # Setup check: runs the bridge in test mode with the current
         # python/checkpoint and reports a checklist. Spans both columns so
         # it visually separates from the option rows above.
         self.setupCheckBtn = Gtk.Button(label="Run Setup Check")
         self.setupCheckBtn.connect("clicked", self.on_setup_check_clicked)
-        grid.attach(self.setupCheckBtn, 0, 13, 2, 1)
+        grid.attach(self.setupCheckBtn, 0, 14, 2, 1)
 
         self.connect("map-event", self.on_map_event)
         self.segTypeDropDown.connect("changed", self.update_options_visibility)
@@ -748,6 +758,7 @@ class OptionsDialog(Gtk.Dialog):
                 self.minMaskAreaEntry.get_text(), self.values.minMaskArea
             ),
             "autoSelectTopMask": self.autoSelectChk.get_active(),
+            "showAllMasks": self.showAllMasksChk.get_active(),
         }
         source_idx = self.modelSourceDropDown.get_active()
         if source_idx > 0:
@@ -802,6 +813,8 @@ class OptionsDialog(Gtk.Dialog):
             self.minMaskAreaEntry.set_text(str(data["minMaskArea"]))
         if "autoSelectTopMask" in data:
             self.autoSelectChk.set_active(bool(data["autoSelectTopMask"]))
+        if "showAllMasks" in data:
+            self.showAllMasksChk.set_active(bool(data["showAllMasks"]))
 
         if hasattr(self, "randColBtn"):
             if "isRandomColor" in data:
@@ -924,6 +937,7 @@ class OptionsDialog(Gtk.Dialog):
             self.minMaskAreaEntry.get_text(), self.values.minMaskArea
         )
         self.values.autoSelectTopMask = self.autoSelectChk.get_active()
+        self.values.showAllMasks = self.showAllMasksChk.get_active()
         self.values.persist(self.configFilePath)
 
         # Return a copy with the parsed model type for the bridge script
@@ -1258,10 +1272,12 @@ def createLayers(image, maskFileNoExt, userSelColor, formatBinary, values):
             )
 
             # Hide all masks except the first (best-scoring) one so the user
-            # sees something immediately instead of an empty layer group.
+            # sees something immediately instead of an empty layer group —
+            # unless "Show all masks" is on, in which case keep every layer
+            # visible so the user can compare candidates directly.
             if idx == 0:
                 top_layer = newlayer
-            else:
+            elif not values.showAllMasks:
                 newlayer.set_visible(False)
 
             idx += 1
@@ -1463,12 +1479,14 @@ def run_segmentation(image, values):
     cleanup(filepathPrefix)
 
     if values.autoSelectTopMask and top_layer is not None:
-        # Convert the top mask directly into a GIMP selection and hide the
-        # overlay group so the user can immediately crop/copy/paint — this
-        # is what most people want to do with the result anyway. We
-        # deliberately skip restoring the pre-run selection (saved in
-        # `channel`) because the new selection is more useful.
-        parent_group.set_visible(False)
+        # Convert the top mask directly into a GIMP selection so the user
+        # can immediately crop/copy/paint. We usually hide the colored
+        # overlay group too (more useful), but if "Show all masks" is on
+        # the user explicitly wants to see the masks, so keep the group
+        # visible. We deliberately skip restoring the pre-run selection
+        # (saved in `channel`) because the new selection is more useful.
+        if not values.showAllMasks:
+            parent_group.set_visible(False)
         procedure = Gimp.get_pdb().lookup_procedure("gimp-image-select-item")
         config = procedure.create_config()
         config.set_property("image", image)
