@@ -24,9 +24,35 @@ echo "    repo: $REPO_DIR"
 echo
 
 # --- 1. Conda ---------------------------------------------------------------
+# Not on PATH? Probe common install locations before giving up. This covers
+# the frequent "installed Miniforge but haven't opened a new terminal yet"
+# case, where ~/.zshrc adds conda to PATH but the current shell hasn't
+# picked it up.
 if ! command -v conda >/dev/null 2>&1; then
-    echo "Error: 'conda' not found on PATH."
-    echo "Install Miniforge (recommended) or Miniconda first:"
+    for cand in \
+        /opt/miniconda3/bin/conda \
+        /opt/miniforge3/bin/conda \
+        /opt/anaconda3/bin/conda \
+        /opt/homebrew/Caskroom/miniforge/base/bin/conda \
+        "$HOME/miniconda3/bin/conda" \
+        "$HOME/miniforge3/bin/conda" \
+        "$HOME/mambaforge/bin/conda" \
+        "$HOME/anaconda3/bin/conda"
+    do
+        if [ -x "$cand" ]; then
+            export PATH="$(dirname "$cand"):$PATH"
+            echo "==> found conda at $cand (adding to PATH for this run)"
+            break
+        fi
+    done
+fi
+
+if ! command -v conda >/dev/null 2>&1; then
+    echo "Error: 'conda' not found on PATH and not in any common install"
+    echo "location. If you already installed Miniforge/Miniconda, open a"
+    echo "new terminal so your shell loads it, then re-run this script."
+    echo
+    echo "Otherwise install Miniforge first:"
     echo "    https://github.com/conda-forge/miniforge"
     exit 1
 fi
