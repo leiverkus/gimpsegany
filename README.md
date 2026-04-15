@@ -109,7 +109,8 @@ At the top of the dialog, the **Preset** bar lets you save the current option co
 **Output:**
 
 - **Random Mask Color** / **Mask Color** — colorize each mask layer randomly, or with a single fixed color.
-- **Auto-select from top mask** (on by default) — after segmentation, hide the mask group and replace the GIMP selection with the best mask, so you can crop / copy / paint against it directly. Turn off to inspect all masks and pick one by hand.
+- **Auto-select from top mask** (on by default) — after segmentation, replace the GIMP selection with the best mask so you can crop / copy / paint against it directly. Turn off to keep your pre-run selection.
+- **Show all masks** (on by default) — keep every generated mask layer visible (and the mask group visible) so you can compare candidates in the layer panel. Turn off to only show the top mask and, when combined with *Auto-select*, also hide the mask group entirely — useful when you only want the selection and nothing on screen.
 
 **Run Setup Check** — launches the bridge in test mode with the current interpreter and checkpoint and reports a checklist (python, torch + device, sam2, checkpoint loads, test inference passes). Failed checks surface the actionable hint from the translation table instead of a raw traceback. Use this first whenever a run fails.
 
@@ -117,8 +118,9 @@ At the top of the dialog, the **Preset** bar lets you save the current option co
 
 1. Pick your options (or load a preset) and click *OK*.
 2. The GIMP status bar shows progress: *Loading model…* (or the HF download warning on first run) → *Running … segmentation…*. The first segmentation pays the model-load cost; subsequent ones with the same checkpoint reuse the cached model and start in under a second.
-3. **Default (Auto-select on):** the mask group is hidden and the top mask is already selected as a GIMP selection. Crop, copy, paint behind, or convert to a layer mask as usual.
-4. **With Auto-select off:** the top mask layer is visible in a *Segment Anything – …* group; the other masks are created but hidden. Toggle visibility to pick a different one — layer names include their coverage percentage (`Mask - Box #1 (17.3%)`) to help.
+3. **Default (Auto-select + Show all masks both on):** a *Segment Anything – …* group is created with every candidate mask visible as a colored overlay, and the GIMP selection is already set to the top (best-scoring) mask. Layer names include coverage percentage (`Mask - Box #1 (17.3%)`) to help pick a different one if the top mask isn't what you wanted.
+4. **Show all masks off + Auto-select on:** the mask group is hidden entirely; you just get the top-mask selection. Good for a pure "give me the selection" workflow.
+5. **Auto-select off:** your pre-run selection is restored and the masks stay on screen (or just the top mask, depending on *Show all masks*). Pick a mask by hand and turn it into a selection via *Select → By Color* or *Fuzzy Select*.
 
 ---
 
