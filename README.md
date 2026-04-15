@@ -45,22 +45,18 @@ You need a Python environment with the SAM backend installed. The plugin can use
 
 Tested on M3 Max, macOS 14+, GIMP 3.2, Miniconda.
 
-**Create a Conda environment with Python 3.11.** SAM2 is most stable on 3.11; 3.13 can break PyTorch extensions.
+**Create the Conda environment from the bundled file.** It pins Python 3.11 and the relevant PyTorch / OpenCV / huggingface_hub deps.
 
 ```bash
-conda create -n sam2 python=3.11 -y
+conda env create -f environment-macos.yml
 conda activate sam2
-```
-
-**Install PyTorch with MPS support.** PyTorch automatically enables the MPS (Metal Performance Shaders) backend on Apple Silicon.
-
-```bash
-pip install torch torchvision torchaudio
 python -c "import torch; print('MPS available:', torch.backends.mps.is_available())"
 # expected: MPS available: True
 ```
 
-**Install SAM2** (skip the CUDA extension build; macOS has no CUDA):
+(If you prefer to set things up manually: `conda create -n sam2 python=3.11 -y && conda activate sam2 && pip install torch torchvision torchaudio opencv-python huggingface_hub`.)
+
+**Install SAM2 itself** (it isn't on PyPI). Skip the CUDA extension build; macOS has no CUDA:
 
 ```bash
 cd ~/Library
@@ -70,12 +66,6 @@ SAM2_BUILD_CUDA=0 pip install -e .
 ```
 
 > The "Failed to build the SAM 2 CUDA extension" warning is expected and harmless on macOS.
-
-**Install OpenCV** (used by the bridge):
-
-```bash
-pip install opencv-python
-```
 
 **Optional — only if you also want SAM1:**
 

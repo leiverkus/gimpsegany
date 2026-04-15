@@ -1,0 +1,26 @@
+# Conda environment for the gimpsegany SAM2 backend on macOS Apple Silicon.
+#
+# Create with:
+#   conda env create -f environment-macos.yml
+#   conda activate sam2
+#
+# Then install SAM2 itself (not on conda-forge / PyPI):
+#   cd ~/Library
+#   git clone https://github.com/facebookresearch/sam2.git
+#   cd sam2
+#   SAM2_BUILD_CUDA=0 pip install -e .
+#
+name: sam2
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - torch
+      - torchvision
+      - torchaudio
+      - opencv-python
+      - huggingface_hub
+      # Optional — only needed if you also want SAM1 models:
+      # - git+https://github.com/facebookresearch/segment-anything.git
