@@ -61,6 +61,22 @@ def _default_python_search_dir():
             return candidate
     return None
 
+
+# Curated SAM 2.1 models on Hugging Face. Selecting one of these in the
+# Model Source dropdown populates the checkpoint path with the HF repo id;
+# the bridge loads via build_sam2_hf() on first use and caches the weights
+# under ~/.cache/huggingface, so users don't need to download .pt files
+# manually. Index 0 is the "custom" sentinel which leaves the path field
+# untouched so users can still point at a local file.
+HF_MODELS = [
+    # (label shown in dropdown, hf repo id, internal model_type)
+    ("— Custom checkpoint —", None, None),
+    ("SAM 2.1 Large (~900 MB, best quality)", "facebook/sam2.1-hiera-large", "sam2_hiera_large"),
+    ("SAM 2.1 Base+ (~320 MB, balanced)", "facebook/sam2.1-hiera-base-plus", "sam2_hiera_base_plus"),
+    ("SAM 2.1 Small (~180 MB, fast)", "facebook/sam2.1-hiera-small", "sam2_hiera_small"),
+    ("SAM 2.1 Tiny (~150 MB, fastest)", "facebook/sam2.1-hiera-tiny", "sam2_hiera_tiny"),
+]
+
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
 
@@ -71,6 +87,7 @@ class DialogValue:
         self.pythonPath = None
         self.modelType = "Auto"
         self.checkPtPath = None
+        self.modelSource = None  # label of selected HF preset, None for custom
         self.maskType = "Multiple"
         self.segType = "Auto"
         self.isRandomColor = False
@@ -87,6 +104,7 @@ class DialogValue:
                 self.pythonPath = data.get("pythonPath", self.pythonPath)
                 self.modelType = data.get("modelType", self.modelType)
                 self.checkPtPath = data.get("checkPtPath", self.checkPtPath)
+                self.modelSource = data.get("modelSource", self.modelSource)
                 self.maskType = data.get("maskType", self.maskType)
                 self.segType = data.get("segType", self.segType)
                 self.isRandomColor = data.get("isRandomColor", self.isRandomColor)
@@ -103,6 +121,7 @@ class DialogValue:
             "pythonPath": self.pythonPath,
             "modelType": self.modelType,
             "checkPtPath": self.checkPtPath,
+            "modelSource": self.modelSource,
             "maskType": self.maskType,
             "segType": self.segType,
             "isRandomColor": self.isRandomColor,
@@ -151,6 +170,15 @@ class OptionsDialog(Gtk.Dialog):
         grid.attach(pythonFileLbl, 0, 0, 1, 1)
         grid.attach(self.pythonPathBox, 1, 0, 1, 1)
 
+        # Model Source (Hugging Face preset or custom checkpoint)
+        modelSourceLbl = Gtk.Label(label="Model Source:", xalign=1)
+        self.modelSourceDropDown = Gtk.ComboBoxText()
+        for label, _hf_id, _mtype in HF_MODELS:
+            self.modelSourceDropDown.append_text(label)
+        self.modelSourceDropDown.set_active(self._initial_model_source_index())
+        grid.attach(modelSourceLbl, 0, 1, 1, 1)
+        grid.attach(self.modelSourceDropDown, 1, 1, 1, 1)
+
         # Model Type
         modelTypeLbl = Gtk.Label(label="Model Type:", xalign=1)
         self.modelTypeDropDown = Gtk.ComboBoxText()
@@ -173,18 +201,18 @@ class OptionsDialog(Gtk.Dialog):
             active_index = 0  # Default to Auto
         self.modelTypeDropDown.set_active(active_index)
 
-        grid.attach(modelTypeLbl, 0, 1, 1, 1)
-        grid.attach(self.modelTypeDropDown, 1, 1, 1, 1)
+        grid.attach(modelTypeLbl, 0, 2, 1, 1)
+        grid.attach(self.modelTypeDropDown, 1, 2, 1, 1)
 
         # Checkpoint Path
         checkPtFileLbl = Gtk.Label(
-            label="Model Checkpoint (.pth/.safetensors):", xalign=1
+            label="Model Checkpoint (.pth/.safetensors or HF id):", xalign=1
         )
         self.checkPtPathBox, self.checkPtPathEntry = self._create_path_chooser(
             "Select Model Checkpoint Path", self.values.checkPtPath
         )
-        grid.attach(checkPtFileLbl, 0, 2, 1, 1)
-        grid.attach(self.checkPtPathBox, 1, 2, 1, 1)
+        grid.attach(checkPtFileLbl, 0, 3, 1, 1)
+        grid.attach(self.checkPtPathBox, 1, 3, 1, 1)
 
         # Segmentation Type
         segTypeLbl = Gtk.Label(label="Segmentation Type:", xalign=1)
@@ -193,8 +221,8 @@ class OptionsDialog(Gtk.Dialog):
         for value in self.segTypeVals:
             self.segTypeDropDown.append_text(value)
         self.segTypeDropDown.set_active(self.segTypeVals.index(self.values.segType))
-        grid.attach(segTypeLbl, 0, 3, 1, 1)
-        grid.attach(self.segTypeDropDown, 1, 3, 1, 1)
+        grid.attach(segTypeLbl, 0, 4, 1, 1)
+        grid.attach(self.segTypeDropDown, 1, 4, 1, 1)
 
         # Mask Type
         self.maskTypeLbl = Gtk.Label(label="Mask Type:", xalign=1)
@@ -203,15 +231,15 @@ class OptionsDialog(Gtk.Dialog):
         for value in self.maskTypeVals:
             self.maskTypeDropDown.append_text(value)
         self.maskTypeDropDown.set_active(self.maskTypeVals.index(self.values.maskType))
-        grid.attach(self.maskTypeLbl, 0, 4, 1, 1)
-        grid.attach(self.maskTypeDropDown, 1, 4, 1, 1)
+        grid.attach(self.maskTypeLbl, 0, 5, 1, 1)
+        grid.attach(self.maskTypeDropDown, 1, 5, 1, 1)
 
         # Selection Points
         self.selPtsLbl = Gtk.Label(label="Selection Points:", xalign=1)
         self.selPtsEntry = Gtk.Entry()
         self.selPtsEntry.set_text(str(self.values.selPtCnt))
-        grid.attach(self.selPtsLbl, 0, 5, 1, 1)
-        grid.attach(self.selPtsEntry, 1, 5, 1, 1)
+        grid.attach(self.selPtsLbl, 0, 6, 1, 1)
+        grid.attach(self.selPtsEntry, 1, 6, 1, 1)
 
         # SAM2 Specific Auto-Segmentation Options
         self.segResLbl = Gtk.Label(label="Segmentation Resolution:", xalign=1)
@@ -220,26 +248,26 @@ class OptionsDialog(Gtk.Dialog):
         for value in self.segResVals:
             self.segResDropDown.append_text(value)
         self.segResDropDown.set_active(self.segResVals.index(self.values.segRes))
-        grid.attach(self.segResLbl, 0, 6, 1, 1)
-        grid.attach(self.segResDropDown, 1, 6, 1, 1)
+        grid.attach(self.segResLbl, 0, 7, 1, 1)
+        grid.attach(self.segResDropDown, 1, 7, 1, 1)
 
         self.cropNLayersLbl = Gtk.Label(label="Crop n Layers:", xalign=1)
         self.cropNLayersChk = Gtk.CheckButton()
         self.cropNLayersChk.set_active(self.values.cropNLayers > 0)
-        grid.attach(self.cropNLayersLbl, 0, 7, 1, 1)
-        grid.attach(self.cropNLayersChk, 1, 7, 1, 1)
+        grid.attach(self.cropNLayersLbl, 0, 8, 1, 1)
+        grid.attach(self.cropNLayersChk, 1, 8, 1, 1)
 
         self.minMaskAreaLbl = Gtk.Label(label="Minimum Mask Area:", xalign=1)
         self.minMaskAreaEntry = Gtk.Entry()
         self.minMaskAreaEntry.set_text(str(self.values.minMaskArea))
-        grid.attach(self.minMaskAreaLbl, 0, 8, 1, 1)
-        grid.attach(self.minMaskAreaEntry, 1, 8, 1, 1)
+        grid.attach(self.minMaskAreaLbl, 0, 9, 1, 1)
+        grid.attach(self.minMaskAreaEntry, 1, 9, 1, 1)
 
         # Mask Color
         if not self.isGrayScale:
             self.randColBtn = Gtk.CheckButton(label="Random Mask Color")
             self.randColBtn.set_active(self.values.isRandomColor)
-            grid.attach(self.randColBtn, 1, 9, 1, 1)
+            grid.attach(self.randColBtn, 1, 10, 1, 1)
 
             self.maskColorLbl = Gtk.Label(label="Mask Color:", xalign=1)
             self.maskColorBtn = Gtk.ColorButton()
@@ -248,13 +276,14 @@ class OptionsDialog(Gtk.Dialog):
                 f"rgb({self.values.maskColor[0]},{self.values.maskColor[1]},{self.values.maskColor[2]})"
             )
             self.maskColorBtn.set_rgba(rgba)
-            grid.attach(self.maskColorLbl, 0, 10, 1, 1)
-            grid.attach(self.maskColorBtn, 1, 10, 1, 1)
+            grid.attach(self.maskColorLbl, 0, 11, 1, 1)
+            grid.attach(self.maskColorBtn, 1, 11, 1, 1)
 
         self.connect("map-event", self.on_map_event)
         self.segTypeDropDown.connect("changed", self.update_options_visibility)
         self.modelTypeDropDown.connect("changed", self.update_options_visibility)
         self.checkPtPathEntry.connect("changed", self.update_options_visibility)
+        self.modelSourceDropDown.connect("changed", self.on_model_source_changed)
         if not self.isGrayScale:
             self.randColBtn.connect("toggled", self.on_random_toggled)
 
@@ -311,6 +340,37 @@ class OptionsDialog(Gtk.Dialog):
 
         return box, entry
 
+    def _initial_model_source_index(self):
+        """Pick the Model Source dropdown entry matching the persisted state.
+
+        Preference order: explicit ``modelSource`` label from settings → HF id
+        match against the current checkpoint path → fall back to Custom (0).
+        """
+        if self.values.modelSource:
+            for i, (label, _hf, _mt) in enumerate(HF_MODELS):
+                if label == self.values.modelSource:
+                    return i
+        if self.values.checkPtPath:
+            for i, (_label, hf_id, _mt) in enumerate(HF_MODELS):
+                if hf_id and hf_id == self.values.checkPtPath:
+                    return i
+        return 0
+
+    def on_model_source_changed(self, widget):
+        """When a curated HF model is chosen, populate the path + model type."""
+        idx = self.modelSourceDropDown.get_active()
+        if idx <= 0:
+            return  # Custom: leave user input alone
+        _label, hf_id, internal_type = HF_MODELS[idx]
+        self.checkPtPathEntry.set_text(hf_id)
+        if internal_type:
+            target = next(
+                (v for v in self.modelTypeVals if v.startswith(internal_type + " ")),
+                None,
+            )
+            if target is not None:
+                self.modelTypeDropDown.set_active(self.modelTypeVals.index(target))
+
     def update_options_visibility(self, widget):
         segType = self.segTypeVals[self.segTypeDropDown.get_active()]
         modelType = self.modelTypeVals[self.modelTypeDropDown.get_active()]
@@ -360,6 +420,16 @@ class OptionsDialog(Gtk.Dialog):
 
         checkpoint_path = self.checkPtPathEntry.get_text().strip()
         self.values.checkPtPath = checkpoint_path if checkpoint_path else None
+
+        # Persist the Model Source choice so the dropdown restores next time.
+        # Only remember a curated preset if its HF id still matches the path —
+        # if the user edited the path by hand, drop back to "custom".
+        source_idx = self.modelSourceDropDown.get_active()
+        if source_idx > 0:
+            label, hf_id, _mt = HF_MODELS[source_idx]
+            self.values.modelSource = label if hf_id == self.values.checkPtPath else None
+        else:
+            self.values.modelSource = None
         self.values.segType = self.segTypeVals[self.segTypeDropDown.get_active()]
         self.values.maskType = self.maskTypeVals[self.maskTypeDropDown.get_active()]
         if hasattr(self, "randColBtn"):
