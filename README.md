@@ -21,127 +21,58 @@ The plugin supports both **Segment Anything 1 (SAM1)** and **Segment Anything 2 
 
 ## Installation
 
-### 1. Plugin installation
+### Quick install (macOS)
 
-Copy or symlink the contents of this repository into a `seganyplugin` folder inside GIMP's user plug-ins directory:
-
-- **Windows:** `C:\Users\[YourUsername]\AppData\Roaming\GIMP\3.0\plug-ins\seganyplugin\`
-- **Linux:** `~/.config/GIMP/3.0/plug-ins/seganyplugin/`
-- **macOS:** `~/Library/Application Support/GIMP/3.0/plug-ins/seganyplugin/` (use the matching minor version, e.g. `3.2/plug-ins/`)
-
-You can find your exact plugin location in GIMP under `Edit → Preferences → Folders → Plug-ins`.
-
-On Linux and macOS, make the scripts executable:
+Clone this repo, then run:
 
 ```bash
-chmod +x ~/Library/Application\ Support/GIMP/3.2/plug-ins/seganyplugin/*.py
+bash install.command
 ```
 
-### 2. Backend installation
+It creates (or reuses) a `sam2` conda env, installs PyTorch / OpenCV / huggingface_hub / sam2, copies `seganyplugin.py` and `seganybridge.py` into the right GIMP plug-ins folder, and seeds a default `segany_settings.json` pointing at `facebook/sam2.1-hiera-large` on Hugging Face — so the first run in GIMP works without any extra configuration. The script is idempotent and preserves an existing settings file.
 
-You need a Python environment with the SAM backend installed. The plugin can use either SAM1 or SAM2 (or both). The platform-specific guides below are recommended.
+Requirements: GIMP 3 already installed, and Miniforge/Miniconda on your `PATH` (https://github.com/conda-forge/miniforge).
 
-#### macOS Apple Silicon (SAM2 with MPS)
+Then restart GIMP and use `Image → Segment Anything Layers`. The first segmentation downloads the SAM 2.1 Large weights from Hugging Face (~900 MB, cached under `~/.cache/huggingface`); the GIMP status bar shows the download and load progress.
 
-Tested on M3 Max, macOS 14+, GIMP 3.2, Miniconda.
+If something goes wrong, click **Run Setup Check** in the plugin dialog — it verifies the interpreter, PyTorch + device, sam2, and the checkpoint load in one go and points at the exact missing piece.
 
-**Create the Conda environment from the bundled file.** It pins Python 3.11 and the relevant PyTorch / OpenCV / huggingface_hub deps.
+### Manual install
+
+If you prefer to set things up by hand (Linux, Windows, or a custom environment), follow the sections below.
+
+#### 1. Plugin files
+
+Copy this repo's `seganyplugin.py` and `seganybridge.py` into a `seganyplugin` folder inside GIMP's user plug-ins directory:
+
+- **Windows:** `C:\Users\[YourUsername]\AppData\Roaming\GIMP\3.x\plug-ins\seganyplugin\`
+- **Linux:** `~/.config/GIMP/3.x/plug-ins/seganyplugin/`
+- **macOS:** `~/Library/Application Support/GIMP/3.x/plug-ins/seganyplugin/`
+
+Replace `3.x` with the minor version that matches your GIMP install (e.g. `3.2`). You can find the exact path under `Edit → Preferences → Folders → Plug-ins`. On Linux and macOS, `chmod +x seganyplugin.py`.
+
+#### 2. Python environment
+
+Create a Python environment with the SAM2 backend. On macOS the bundled `environment-macos.yml` is the easiest path:
 
 ```bash
 conda env create -f environment-macos.yml
 conda activate sam2
-python -c "import torch; print('MPS available:', torch.backends.mps.is_available())"
-# expected: MPS available: True
+SAM2_BUILD_CUDA=0 pip install git+https://github.com/facebookresearch/sam2.git
 ```
 
-(If you prefer to set things up manually: `conda create -n sam2 python=3.11 -y && conda activate sam2 && pip install torch torchvision torchaudio opencv-python huggingface_hub`.)
+On Linux with CUDA, follow Meta's instructions at https://github.com/facebookresearch/sam2 and also `pip install opencv-python huggingface_hub`.
 
-**Install SAM2 itself** (it isn't on PyPI). Skip the CUDA extension build; macOS has no CUDA:
+For SAM1 support (optional), additionally run `pip install git+https://github.com/facebookresearch/segment-anything.git` and download one of the `sam_vit_*.pth` checkpoints.
 
-```bash
-cd ~/Library
-git clone https://github.com/facebookresearch/sam2.git
-cd sam2
-SAM2_BUILD_CUDA=0 pip install -e .
-```
+#### 3. Point the plugin at it
 
-> The "Failed to build the SAM 2 CUDA extension" warning is expected and harmless on macOS.
+Open GIMP, then `Image → Segment Anything Layers`, and set:
 
-**Optional — only if you also want SAM1:**
+- **Python3 Path** — the interpreter with SAM2 installed (e.g. `/opt/miniconda3/envs/sam2/bin/python`). The **Detect…** button lists conda envs it finds automatically.
+- **Model Source** — pick one of the curated SAM 2.1 entries to load via Hugging Face, or choose *Custom checkpoint* and point at a local `.pt` / `.safetensors`.
 
-```bash
-pip install git+https://github.com/facebookresearch/segment-anything.git
-```
-
-This fork's bridge no longer requires `segment_anything` for SAM2-only usage.
-
-**Download a checkpoint.** Both SAM 2.0 and SAM 2.1 work:
-
-```bash
-mkdir -p ~/Library/sam2/checkpoints
-
-# SAM 2.0 Large
-curl -L -o ~/Library/sam2/checkpoints/sam2_hiera_large.pt \
-  https://dl.fbaipublicfiles.com/segment_anything_2/072824/sam2_hiera_large.pt
-
-# OR SAM 2.1 Large
-curl -L -o ~/Library/sam2/checkpoints/sam2.1_hiera_large.pt \
-  https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt
-```
-
-#### Linux / Windows (SAM2 with CUDA)
-
-Follow Meta's instructions at https://github.com/facebookresearch/segment-anything-2.
-
-**Prerequisites:** Python ≥ 3.10, PyTorch ≥ 2.3.1.
-
-```bash
-git clone https://github.com/facebookresearch/segment-anything-2.git
-cd segment-anything-2
-pip install -e .
-pip install opencv-python
-```
-
-Then download a checkpoint (Tiny / Small / Base Plus / Large, version 2.0 or 2.1).
-
-#### SAM1 backend (optional)
-
-Follow Meta's instructions at https://github.com/facebookresearch/segment-anything.
-
-```bash
-git clone https://github.com/facebookresearch/segment-anything.git
-cd segment-anything
-pip install -e .
-```
-
-Then download a SAM1 checkpoint (`sam_vit_h_4b8939.pth`, `sam_vit_l_0b3195.pth`, or `sam_vit_b_01ec64.pth`).
-
-### 3. Bridge test
-
-Verify your installation by running the bridge directly. Open a terminal and `cd` into the plugin folder.
-
-**SAM2 (or SAM 2.1):**
-
-```bash
-/path/to/python ./seganybridge.py auto /path/to/sam2_hiera_large.pt
-```
-
-**SAM1:**
-
-```bash
-/path/to/python ./seganybridge.py auto /path/to/sam_vit_h_4b8939.pth
-```
-
-A `Success!!` message indicates the backend is wired up correctly. On Apple Silicon you should also see `Model moved to MPS (Apple Silicon)`.
-
-### 4. First run in GIMP
-
-Open GIMP and load any image. From `Image → Segment Anything Layers`, open the dialog and fill in:
-
-- **Python3 Path** — the Python interpreter that has the SAM backend installed (e.g. `/opt/miniconda3/envs/sam2/bin/python` on macOS). You can paste the path directly into the field.
-- **Checkpoint Path** — the full path to your `.pt` / `.pth` / `.safetensors` checkpoint. Paste or use the Browse button.
-
-The values are persisted to `segany_settings.json` next to the plugin and restored on the next run.
+Click **Run Setup Check** to verify the combo works before running a real segmentation. Values are persisted to `segany_settings.json` next to the plugin files.
 
 ---
 
