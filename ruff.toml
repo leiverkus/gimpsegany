@@ -1,0 +1,4 @@
+[lint.per-file-ignores]
+# GIMP plugins must call gi.require_version() before importing from gi.repository,
+# which forces interleaved require/import calls that violate E402.
+"seganyplugin.py" = ["E402"]

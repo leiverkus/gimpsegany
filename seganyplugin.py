@@ -6,14 +6,11 @@ import gi
 gi.require_version("Gimp", "3.0")
 from gi.repository import Gimp
 
-gi.require_version("GimpUi", "3.0")
-from gi.repository import GimpUi
-
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk
 
 gi.require_version("Gegl", "0.4")
-from gi.repository import GObject, Gio, Gegl
+from gi.repository import Gio, Gegl
 from gi.repository import GLib
 
 
@@ -24,7 +21,6 @@ import threading
 import collections
 import atexit
 from os.path import exists
-from array import array
 import random
 import os
 import sys
@@ -130,7 +126,6 @@ class OptionsDialog(Gtk.Dialog):
         self.set_default_size(400, 200)
 
         self.boxPathNames = sorted(boxPathDict.keys())
-        boxPathExist = len(self.boxPathNames) > 0
         self.isGrayScale = image.get_base_type() == Gimp.ImageType.GRAYA_IMAGE
         scriptDir = os.path.dirname(os.path.abspath(__file__))
         self.configFilePath = os.path.join(scriptDir, "segany_settings.json")
