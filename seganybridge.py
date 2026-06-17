@@ -34,6 +34,7 @@ import numpy as np
 import cv2
 import sys
 import json
+import argparse
 
 # SAM2 imports
 from sam2.build_sam import build_sam2
@@ -685,23 +686,51 @@ def _serve(real_stdout):
 
 
 def main():
-    # Test mode (preserves the README test command):
-    #   python seganybridge.py <model_type|auto> <checkpoint_path>
-    if len(sys.argv) == 3:
-        sys.exit(_run_test(sys.argv[1], sys.argv[2]))
+    parser = argparse.ArgumentParser(
+        prog="seganybridge.py",
+        description=(
+            "SAM segmentation backend for the GIMP plugin. With no arguments "
+            "it runs as a daemon, reading JSON jobs from stdin and keeping "
+            "models loaded across jobs. Given MODEL_TYPE and CHECKPOINT it "
+            "runs a one-shot backend self-test instead."
+        ),
+        epilog=(
+            "Environment: SEGANY_FORCE_CPU=1 skips the MPS/CUDA backends and "
+            "runs on CPU."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    # Both arguments are optional so the bare `seganybridge.py` daemon call and
+    # the `seganybridge.py <model_type> <checkpoint>` test call (as issued by
+    # the plugin) keep working unchanged.
+    parser.add_argument(
+        "model_type",
+        nargs="?",
+        metavar="MODEL_TYPE",
+        help=(
+            "model type (e.g. sam2_hiera_large) or 'auto' to infer it from the "
+            "checkpoint filename; switches to test mode when given"
+        ),
+    )
+    parser.add_argument(
+        "checkpoint",
+        nargs="?",
+        metavar="CHECKPOINT",
+        help=(
+            "path to a .pt/.pth/.safetensors checkpoint, or a Hugging Face id "
+            "like facebook/sam2.1-hiera-large"
+        ),
+    )
+    args = parser.parse_args()
 
-    if len(sys.argv) != 1:
-        print(
-            "Usage:\n"
-            "  python seganybridge.py                                  "
-            "# daemon: JSON jobs from stdin\n"
-            "  python seganybridge.py <model_type|auto> <checkpoint>   "
-            "# backend test",
-            file=sys.stderr,
-        )
-        sys.exit(2)
+    if args.model_type is None and args.checkpoint is None:
+        _serve(real_stdout=sys.stdout)
+        return
 
-    _serve(real_stdout=sys.stdout)
+    if args.model_type is None or args.checkpoint is None:
+        parser.error("test mode requires both MODEL_TYPE and CHECKPOINT")
+
+    sys.exit(_run_test(args.model_type, args.checkpoint))
 
 
 if __name__ == "__main__":
