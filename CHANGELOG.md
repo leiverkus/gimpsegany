@@ -22,6 +22,9 @@ Major overhaul of the install workflow and the plugin↔bridge protocol.
 - Unit tests for the bridge's pure logic (config selection, model-type
   detection, HF-id heuristic, MPS detector, PNG mask writer) and a CI test job.
 - `__version__` in both Python files and this changelog.
+- Experimental GIMP extension package (`gimp-segany.gex`, built by
+  `packaging/build-gex.sh` and attached to releases) for double-click install
+  of the plug-in files. Does not provision the Python backend.
 
 ### Changed
 - **Masks are transported as colored RGBA PNGs** instead of a hand-rolled

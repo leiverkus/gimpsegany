@@ -31,6 +31,9 @@ jobs:
           cp seganyplugin.py seganybridge.py README.md seganyplugin/
           zip -r gimp-segany-gimp3.zip seganyplugin
 
+      - name: Build GIMP extension (.gex)
+        run: bash packaging/build-gex.sh
+
       # - name: Create GIMP 2 Plugin Zip
       #   run: zip gimp-segany-gimp2.zip legacy/seganyplugin_GIMP2.py legacy/seganybridge_GIMP2_SAM1.py
 
@@ -44,6 +47,7 @@ jobs:
           prerelease: ${{ steps.relmeta.outputs.prerelease }}
           files: |
             gimp-segany-gimp3.zip
+            gimp-segany.gex
             # gimp-segany-gimp2.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- GIMP extension metadata. The AppStream <id> must match the top-level
+     directory name inside the .gex archive (see packaging/build-gex.sh). -->
+<component type="addon">
+  <id>io.github.leiverkus.gimpsegany</id>
+  <extends>org.gimp.GIMP</extends>
+  <name>Segment Anything Layers</name>
+  <summary>Segment objects in GIMP with Meta's Segment Anything (SAM1/SAM2/SAM2.1)</summary>
+  <description>
+    <p>
+      GIMP 3 plug-in that segments objects in raster images using Meta's
+      Segment Anything models (SAM1, SAM2 and SAM 2.1), with macOS Apple
+      Silicon (MPS) support and Hugging Face checkpoint loading.
+    </p>
+    <p>
+      Note: this extension installs the plug-in files only. The plug-in drives
+      an external Python backend (PyTorch + sam2) that must still be set up
+      once — run the bundled installer (install.command / install-linux.sh /
+      install-windows.ps1) or follow the manual setup in the project README.
+    </p>
+  </description>
+  <url type="homepage">https://github.com/leiverkus/gimpsegany</url>
+  <url type="bugtracker">https://github.com/leiverkus/gimpsegany/issues</url>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <releases>
+    <release version="3.0.0" date="2026-06-17"/>
+  </releases>
+</component>

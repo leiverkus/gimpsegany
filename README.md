@@ -63,6 +63,10 @@ Same behaviour as the other installers (uv when present, stdlib `venv` + `pip` o
 
 Requirements: GIMP 3 already installed and launched once, and either `uv` on your `PATH` (`irm https://astral.sh/uv/install.ps1 | iex`) or an existing Python 3.10+ (the `py` launcher or `python` on `PATH`).
 
+### GIMP extension package (`.gex`, experimental)
+
+Releases also include a `gimp-segany.gex` — a GIMP 3 extension that installs the **plug-in files** with a double-click (build it locally with `bash packaging/build-gex.sh`). It is a convenience for the file-copy step only: it does **not** set up the Python backend (PyTorch + sam2), so you still need to run one of the installers above (or the manual setup) once. Because of that, the installers remain the recommended path.
+
 ### Manual install
 
 If you prefer to set things up by hand (Windows, or a custom environment), follow the sections below.
