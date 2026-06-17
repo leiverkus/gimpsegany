@@ -37,9 +37,21 @@ Then restart GIMP and use `Image → Segment Anything Layers`. The first segment
 
 If something goes wrong, click **Run Setup Check** in the plugin dialog — it verifies the interpreter, PyTorch + device, sam2, and the checkpoint load in one go and points at the exact missing piece.
 
+### Quick install (Linux)
+
+Clone this repo, then run:
+
+```bash
+bash install-linux.sh
+```
+
+It does the same as the macOS installer: creates (or reuses) a `sam2` conda env, installs PyTorch / OpenCV / huggingface_hub / sam2, copies the plugin files into GIMP's per-user plug-ins folder, and seeds a default `segany_settings.json`. On Linux `pip install torch` pulls the CUDA-enabled wheels, so GPU machines work out of the box (and CPU-only machines still run). It auto-detects both a standard `~/.config/GIMP` install and a Flatpak install under `~/.var/app/org.gimp.GIMP/`. The script is idempotent and preserves an existing settings file.
+
+Requirements: GIMP 3 already installed and launched once, and Miniforge/Miniconda on your `PATH` (https://github.com/conda-forge/miniforge).
+
 ### Manual install
 
-If you prefer to set things up by hand (Linux, Windows, or a custom environment), follow the sections below.
+If you prefer to set things up by hand (Windows, or a custom environment), follow the sections below.
 
 #### 1. Plugin files
 
