@@ -7,6 +7,20 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Tagging `vX.Y.Z` triggers the release workflow, which builds the plugin zip and
 publishes a GitHub release (a `-rc`/`-beta` suffix marks it as a pre-release).
 
+## [Unreleased]
+
+### Added
+- Experimental GIMP extension package (`gimp-segany.gex`, built by
+  `packaging/build-gex.sh` and attached to releases) for double-click install
+  of the plug-in files. Does not provision the Python backend.
+
+### Changed
+- Adopt current GIMP 3 procedure idioms in `do_create_procedure` /
+  `seg_any_run`: declare supported image types (`set_image_types("RGB*, GRAY*")`),
+  add `set_documentation`, call `GimpUi.init()` before the dialog, and only
+  show the dialog in INTERACTIVE run mode (non-interactive runs reuse the last
+  saved settings). The hand-built options dialog is otherwise unchanged.
+
 ## [3.0.0] - 2026-06-17
 
 Major overhaul of the install workflow and the plugin↔bridge protocol.
@@ -22,9 +36,6 @@ Major overhaul of the install workflow and the plugin↔bridge protocol.
 - Unit tests for the bridge's pure logic (config selection, model-type
   detection, HF-id heuristic, MPS detector, PNG mask writer) and a CI test job.
 - `__version__` in both Python files and this changelog.
-- Experimental GIMP extension package (`gimp-segany.gex`, built by
-  `packaging/build-gex.sh` and attached to releases) for double-click install
-  of the plug-in files. Does not provision the Python backend.
 
 ### Changed
 - **Masks are transported as colored RGBA PNGs** instead of a hand-rolled

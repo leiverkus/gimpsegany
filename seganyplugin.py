@@ -1508,24 +1508,49 @@ class SegAnyPlugin(Gimp.PlugIn):
         procedure = Gimp.ImageProcedure.new(
             self, name, Gimp.PDBProcType.PLUGIN, self.seg_any_run, None
         )
+        # Only enable on RGB/GRAY images (with or without alpha) — the formats
+        # the segmentation pipeline supports.
+        procedure.set_image_types("RGB*, GRAY*")
         procedure.set_sensitivity_mask(Gimp.ProcedureSensitivityMask.DRAWABLE)
         procedure.set_menu_label("Segment Anything Layers")
+        procedure.set_documentation(
+            "Segment objects with Meta's Segment Anything",
+            "Adds masks as layers using SAM1/SAM2/SAM2.1 via an external Python "
+            "backend. Configure the interpreter and model in the dialog; "
+            "non-interactive runs reuse the last saved settings.",
+            name,
+        )
         procedure.set_attribution("Shrinivas Kulkarni", "Shrinivas Kulkarni", "2024")
         procedure.add_menu_path("<Image>/Image")
         return procedure
 
     def seg_any_run(self, procedure, run_mode, image, drawables, config, data):
-        boxPathDict = getPathDict(image)
-        dialog = OptionsDialog(image, boxPathDict)
-        response = dialog.run()
+        if run_mode == Gimp.RunMode.INTERACTIVE:
+            # GimpUi.init() is the documented way to wire a plug-in's GTK UI
+            # into GIMP; import it lazily so headless runs don't need it.
+            gi.require_version("GimpUi", "3.0")
+            from gi.repository import GimpUi
 
-        if response == Gtk.ResponseType.OK:
-            values = dialog.get_values()
-            image.undo_group_start()
-            run_segmentation(image, values)
-            image.undo_group_end()
+            GimpUi.init("seg-any-gimp3")
+            boxPathDict = getPathDict(image)
+            dialog = OptionsDialog(image, boxPathDict)
+            response = dialog.run()
+            values = dialog.get_values() if response == Gtk.ResponseType.OK else None
+            dialog.destroy()
+            if values is None:
+                return procedure.new_return_values(
+                    Gimp.PDBStatusType.CANCEL, GLib.Error()
+                )
+        else:
+            # NONINTERACTIVE / WITH_LAST_VALS: this plug-in keeps its parameters
+            # in segany_settings.json (not in declared PDB args), so reuse the
+            # last saved settings instead of popping a dialog.
+            scriptDir = os.path.dirname(os.path.abspath(__file__))
+            values = DialogValue(os.path.join(scriptDir, "segany_settings.json"))
 
-        dialog.destroy()
+        image.undo_group_start()
+        run_segmentation(image, values)
+        image.undo_group_end()
 
         return procedure.new_return_values(Gimp.PDBStatusType.SUCCESS, GLib.Error())
 
