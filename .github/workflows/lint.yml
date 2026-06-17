@@ -24,4 +24,22 @@ jobs:
           python -m py_compile seganyplugin.py
 
       - name: Ruff
-        run: ruff check seganybridge.py seganyplugin.py
+        run: ruff check seganybridge.py seganyplugin.py tests
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # seganybridge guards its torch / OpenCV / sam2 imports, so the pure
+      # logic under test imports without those heavy dependencies — pytest is
+      # the only thing CI needs to install.
+      - name: Install pytest
+        run: pip install pytest
+
+      - name: Run tests
+        run: python -m pytest tests -q

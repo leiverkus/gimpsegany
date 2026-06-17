@@ -23,24 +23,53 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 """
 
 import os
+import sys
+import json
+import argparse
 
 # Let PyTorch fall back to CPU for MPS ops that aren't implemented yet in the
 # Apple Silicon backend instead of crashing. Must be set before torch is
 # imported. Users can override by exporting the variable themselves.
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
-import torch
-import numpy as np
-import cv2
-import sys
-import json
-import argparse
+# Heavy, install-specific dependencies are imported defensively so the pure
+# helper logic in this module stays importable (e.g. by the unit tests) even
+# when torch / OpenCV / sam2 aren't present. main() fails fast with the
+# original ImportError text — which the plugin knows how to translate — if a
+# runtime dependency is actually missing; see _require_runtime_deps().
+_IMPORT_ERRORS = {}
+
+try:
+    import torch
+except ImportError as e:  # pragma: no cover - exercised only without torch
+    torch = None
+    _IMPORT_ERRORS["torch"] = e
+
+try:
+    import numpy as np
+except ImportError as e:  # pragma: no cover
+    np = None
+    _IMPORT_ERRORS["numpy"] = e
+
+try:
+    import cv2
+except ImportError as e:  # pragma: no cover
+    cv2 = None
+    _IMPORT_ERRORS["cv2"] = e
 
 # SAM2 imports
-from sam2.build_sam import build_sam2
-from sam2.sam2_image_predictor import SAM2ImagePredictor
-from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
+try:
+    from sam2.build_sam import build_sam2
+    from sam2.sam2_image_predictor import SAM2ImagePredictor
+    from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
+except ImportError as e:  # pragma: no cover
+    build_sam2 = None
+    SAM2ImagePredictor = None
+    SAM2AutomaticMaskGenerator = None
+    _IMPORT_ERRORS["sam2"] = e
 
+# build_sam2_hf is absent on older sam2 installs that still provide build_sam2,
+# so it gets its own guard rather than being lumped with the block above.
 try:
     from sam2.build_sam import build_sam2_hf
 except ImportError:
@@ -235,6 +264,34 @@ class SAM1Strategy(SegmentationStrategy):
         )
 
 
+# SAM 2.0 configs live in the sam2 package root; SAM 2.1 configs live under
+# configs/sam2.1/. Keyed by the internal model_type.
+SAM2_CONFIGS_V2 = {
+    "sam2_hiera_tiny": "sam2_hiera_t.yaml",
+    "sam2_hiera_small": "sam2_hiera_s.yaml",
+    "sam2_hiera_base_plus": "sam2_hiera_b+.yaml",
+    "sam2_hiera_large": "sam2_hiera_l.yaml",
+}
+SAM2_CONFIGS_V21 = {
+    "sam2_hiera_tiny": "configs/sam2.1/sam2.1_hiera_t.yaml",
+    "sam2_hiera_small": "configs/sam2.1/sam2.1_hiera_s.yaml",
+    "sam2_hiera_base_plus": "configs/sam2.1/sam2.1_hiera_b+.yaml",
+    "sam2_hiera_large": "configs/sam2.1/sam2.1_hiera_l.yaml",
+}
+
+
+def select_sam2_config(checkpoint_path, model_type):
+    """Pick the SAM2 Hydra config for a checkpoint.
+
+    SAM 2.1 checkpoints (filenames starting with ``sam2.1``) need the
+    ``configs/sam2.1/`` yamls; SAM 2.0 checkpoints use the package-root yamls.
+    Falls back to the large 2.0 config for an unknown model type.
+    """
+    is_sam21 = os.path.basename(checkpoint_path).startswith("sam2.1")
+    configs = SAM2_CONFIGS_V21 if is_sam21 else SAM2_CONFIGS_V2
+    return configs.get(model_type, "sam2_hiera_l.yaml")
+
+
 class SAM2Strategy(SegmentationStrategy):
     MODEL_TYPE_LOOKUP = {
         "sam2_hiera_large": "sam2_hiera_large",
@@ -278,6 +335,9 @@ class SAM2Strategy(SegmentationStrategy):
             return False
 
     def load_from_hf(self, hf_id, device):
+        if "sam2" in _IMPORT_ERRORS:
+            print(str(_IMPORT_ERRORS["sam2"]))
+            return None
         if build_sam2_hf is None:
             print(
                 "Error: this sam2 install has no build_sam2_hf. "
@@ -300,23 +360,10 @@ class SAM2Strategy(SegmentationStrategy):
             return None
 
     def load_model(self, checkPtFilePath, modelType, device):
-        model_filename = os.path.basename(checkPtFilePath)
-        is_sam21 = model_filename.startswith("sam2.1")
-
-        model_configs_v2 = {
-            "sam2_hiera_tiny": "sam2_hiera_t.yaml",
-            "sam2_hiera_small": "sam2_hiera_s.yaml",
-            "sam2_hiera_base_plus": "sam2_hiera_b+.yaml",
-            "sam2_hiera_large": "sam2_hiera_l.yaml",
-        }
-        model_configs_v21 = {
-            "sam2_hiera_tiny": "configs/sam2.1/sam2.1_hiera_t.yaml",
-            "sam2_hiera_small": "configs/sam2.1/sam2.1_hiera_s.yaml",
-            "sam2_hiera_base_plus": "configs/sam2.1/sam2.1_hiera_b+.yaml",
-            "sam2_hiera_large": "configs/sam2.1/sam2.1_hiera_l.yaml",
-        }
-        configs = model_configs_v21 if is_sam21 else model_configs_v2
-        config_file = configs.get(modelType, "sam2_hiera_l.yaml")
+        if build_sam2 is None:
+            print(str(_IMPORT_ERRORS.get("sam2", "Error: No module named 'sam2'")))
+            return None
+        config_file = select_sam2_config(checkPtFilePath, modelType)
         actual_checkpoint_path = checkPtFilePath
         if checkPtFilePath.endswith(".safetensors"):
             print("Converting safetensors to pth format...")
@@ -428,7 +475,7 @@ def _is_mps_failure(exc):
 
 
 def _select_device():
-    if _force_cpu_requested() or _mps_disabled:
+    if _force_cpu_requested() or _mps_disabled or torch is None:
         return "cpu"
     if torch.backends.mps.is_available():
         return "mps"
@@ -685,7 +732,18 @@ def _serve(real_stdout):
             _emit({"status": "error", "message": str(e)})
 
 
+def _require_runtime_deps():
+    """Abort with the original ImportError text if a dependency needed to load
+    or run any model is missing. The text (e.g. ``No module named 'torch'``)
+    is what the plugin's error translator matches to show an actionable hint.
+    """
+    for name in ("torch", "numpy", "cv2"):
+        if name in _IMPORT_ERRORS:
+            raise SystemExit(str(_IMPORT_ERRORS[name]))
+
+
 def main():
+    _require_runtime_deps()
     parser = argparse.ArgumentParser(
         prog="seganybridge.py",
         description=(
