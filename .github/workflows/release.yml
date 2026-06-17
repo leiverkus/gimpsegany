@@ -28,7 +28,7 @@ jobs:
       - name: Create GIMP 3 Plugin Zip
         run: |
           mkdir seganyplugin
-          cp seganyplugin.py seganybridge.py README.md seganyplugin/
+          cp seganyplugin.py seganybridge.py segany_backend.py README.md seganyplugin/
           zip -r gimp-segany-gimp3.zip seganyplugin
 
       - name: Build GIMP extension (.gex)

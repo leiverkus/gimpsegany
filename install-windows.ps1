@@ -144,7 +144,7 @@ Write-Host "==> installing into GIMP $($GimpVersion.Name)"
 Write-Host "    $PluginDir"
 
 New-Item -ItemType Directory -Force -Path $PluginDir | Out-Null
-Copy-Item -Path seganyplugin.py, seganybridge.py -Destination $PluginDir -Force
+Copy-Item -Path seganyplugin.py, seganybridge.py, segany_backend.py -Destination $PluginDir -Force
 
 # --- 5. Default settings -----------------------------------------------------
 $Settings = Join-Path $PluginDir "segany_settings.json"

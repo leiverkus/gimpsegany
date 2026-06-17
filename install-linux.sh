@@ -127,7 +127,7 @@ echo "==> installing into GIMP $GIMP_VERSION"
 echo "    $PLUGIN_DIR"
 
 mkdir -p "$PLUGIN_DIR"
-cp -v seganyplugin.py seganybridge.py "$PLUGIN_DIR/"
+cp -v seganyplugin.py seganybridge.py segany_backend.py "$PLUGIN_DIR/"
 chmod +x "$PLUGIN_DIR/seganyplugin.py"
 
 # --- 5. Default settings ---------------------------------------------------

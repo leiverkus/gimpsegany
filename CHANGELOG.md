@@ -20,6 +20,11 @@ publishes a GitHub release (a `-rc`/`-beta` suffix marks it as a pre-release).
   add `set_documentation`, call `GimpUi.init()` before the dialog, and only
   show the dialog in INTERACTIVE run mode (non-interactive runs reuse the last
   saved settings). The hand-built options dialog is otherwise unchanged.
+- Extract the GIMP-independent logic (bridge IPC client, interpreter
+  discovery, error translation, settings, helpers) into a new
+  `segany_backend.py` sibling module that `seganyplugin.py` imports. ~390
+  lines leave the plugin file, and the backend is now unit-tested in CI
+  without GIMP. The installers, release zip and `.gex` ship the new file too.
 
 ## [3.0.0] - 2026-06-17
 

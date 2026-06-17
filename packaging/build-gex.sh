@@ -12,6 +12,7 @@
 #   <ext-id>/<ext-id>.metainfo.xml          AppStream id must equal <ext-id>
 #   <ext-id>/seganyplugin/seganyplugin.py   folder name must match the .py
 #   <ext-id>/seganyplugin/seganybridge.py
+#   <ext-id>/seganyplugin/segany_backend.py
 # All files live under the single top-level <ext-id> directory.
 
 set -e
@@ -29,7 +30,7 @@ BUILD="$(mktemp -d)"
 DEST="$BUILD/$EXT_ID"
 mkdir -p "$DEST/seganyplugin"
 
-cp seganyplugin.py seganybridge.py "$DEST/seganyplugin/"
+cp seganyplugin.py seganybridge.py segany_backend.py "$DEST/seganyplugin/"
 chmod +x "$DEST/seganyplugin/seganyplugin.py"
 
 # Metainfo at {id}/{id}.metainfo.xml; inject the live version into the release.
