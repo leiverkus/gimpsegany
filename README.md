@@ -68,14 +68,19 @@ Replace `3.x` with the minor version that matches your GIMP install (e.g. `3.2`)
 Create a Python environment with the SAM2 backend. On macOS the bundled `environment-macos.yml` is the easiest path:
 
 ```bash
-conda env create -f environment-macos.yml
+conda env create -f environment-macos.yml   # run from the repo root
 conda activate sam2
-SAM2_BUILD_CUDA=0 pip install git+https://github.com/facebookresearch/sam2.git
+SAM2_BUILD_CUDA=0 pip install \
+  "git+https://github.com/facebookresearch/sam2.git@2b90b9f5ceec907a1c18123530e92e794ad901a4"
 ```
 
-On Linux with CUDA, follow Meta's instructions at https://github.com/facebookresearch/sam2 and also `pip install opencv-python huggingface_hub`.
+The Python dependencies are pinned in [`requirements-lock.txt`](requirements-lock.txt) (a known-good set captured from a working env), and `sam2` is pinned to an exact git commit above, so installs are reproducible. The `environment-macos.yml` pulls in the lock file automatically. To create the env without conda, use `pip install -r requirements-lock.txt` into any Python 3.11 venv, then the `sam2` line above.
 
-For SAM1 support (optional), additionally run `pip install git+https://github.com/facebookresearch/segment-anything.git` and download one of the `sam_vit_*.pth` checkpoints.
+On Linux the same `requirements-lock.txt` works — `pip install -r requirements-lock.txt` pulls the CUDA-enabled torch wheels — followed by the pinned `sam2` line.
+
+For SAM1 support (optional), additionally run `pip install "git+https://github.com/facebookresearch/segment-anything.git@dca509fe793f601edb92606367a655c15ac00fdf"` and download one of the `sam_vit_*.pth` checkpoints.
+
+To bump the pins later: install the latest versions, verify a segmentation works, then regenerate the `==` lines in `requirements-lock.txt` from the working env and update the `sam2` commit.
 
 #### 3. Point the plugin at it
 

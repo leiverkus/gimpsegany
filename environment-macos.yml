@@ -4,11 +4,12 @@
 #   conda env create -f environment-macos.yml
 #   conda activate sam2
 #
-# Then install SAM2 itself (not on conda-forge / PyPI):
-#   cd ~/Library
-#   git clone https://github.com/facebookresearch/sam2.git
-#   cd sam2
-#   SAM2_BUILD_CUDA=0 pip install -e .
+# Then install SAM2 itself (not on conda-forge / PyPI) pinned to the
+# known-good commit, so the build is reproducible:
+#   SAM2_BUILD_CUDA=0 pip install \
+#     "git+https://github.com/facebookresearch/sam2.git@2b90b9f5ceec907a1c18123530e92e794ad901a4"
+#
+# Python deps are pinned in requirements-lock.txt (shared with the installers).
 #
 name: sam2
 channels:
@@ -17,10 +18,6 @@ dependencies:
   - python=3.11
   - pip
   - pip:
-      - torch
-      - torchvision
-      - torchaudio
-      - opencv-python
-      - huggingface_hub
-      # Optional — only needed if you also want SAM1 models:
-      # - git+https://github.com/facebookresearch/segment-anything.git
+      - -r requirements-lock.txt
+      # Optional — only needed if you also want SAM1 models (pinned commit):
+      # - git+https://github.com/facebookresearch/segment-anything.git@dca509fe793f601edb92606367a655c15ac00fdf

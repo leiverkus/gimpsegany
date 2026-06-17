@@ -1,0 +1,19 @@
+# Pinned, known-good dependency set for the SAM2 backend.
+#
+# Captured from a working macOS Apple Silicon (Python 3.11) environment on
+# 2026-06-17. The same version numbers resolve to the right platform build via
+# PyPI — MPS-capable wheels on macOS, CUDA wheels on Linux — so this file is
+# used unchanged by both install.command and install-linux.sh.
+#
+# sam2 is NOT on PyPI and is pinned to an exact git commit separately (see the
+# installers / README), because a bare git URL would float to the repo tip.
+#
+# To refresh: install the latest versions, verify a segmentation works, then
+# regenerate these pins from the working env (pip freeze for the lines below).
+
+torch==2.11.0
+torchvision==0.26.0
+torchaudio==2.11.0
+opencv-python==4.13.0.92
+huggingface_hub==1.10.2
+numpy==2.4.4

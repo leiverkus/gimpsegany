@@ -19,6 +19,11 @@ cd "$(dirname "$0")"
 ENV_NAME="sam2"
 REPO_DIR="$(pwd)"
 
+# sam2 isn't on PyPI; pin it to a known-good commit so the build is
+# reproducible (a bare git URL floats to the repo tip). Python deps are pinned
+# in requirements-lock.txt.
+SAM2_GIT="git+https://github.com/facebookresearch/sam2.git@2b90b9f5ceec907a1c18123530e92e794ad901a4"
+
 echo "==> gimpsegany installer (Linux)"
 echo "    repo: $REPO_DIR"
 echo
@@ -66,8 +71,7 @@ if conda env list | awk '{print $1}' | grep -qx "${ENV_NAME}"; then
 else
     echo "==> creating conda env '${ENV_NAME}' (python 3.11)"
     conda create -y -n "${ENV_NAME}" python=3.11
-    conda run -n "${ENV_NAME}" pip install \
-        torch torchvision torchaudio opencv-python huggingface_hub
+    conda run -n "${ENV_NAME}" pip install -r requirements-lock.txt
 fi
 
 ENV_PY=$(conda run -n "${ENV_NAME}" python -c "import sys; print(sys.executable)")
@@ -86,17 +90,16 @@ ensure_pkg() {
 }
 
 echo "==> verifying python dependencies"
-ensure_pkg "torch"             "torch"
-ensure_pkg "cv2"               "opencv-python"
-ensure_pkg "huggingface_hub"   "huggingface_hub"
+ensure_pkg "torch"             "torch==2.11.0"
+ensure_pkg "cv2"               "opencv-python==4.13.0.92"
+ensure_pkg "huggingface_hub"   "huggingface_hub==1.10.2"
 
-# sam2 isn't on PyPI — install from GitHub if missing.
+# sam2 isn't on PyPI — install the pinned commit from GitHub if missing.
 if conda run -n "${ENV_NAME}" python -c "import sam2" >/dev/null 2>&1; then
     echo "    ✓ sam2 already installed"
 else
     echo "    … installing sam2 from GitHub (this may take a few minutes)"
-    SAM2_BUILD_CUDA=0 conda run -n "${ENV_NAME}" pip install \
-        "git+https://github.com/facebookresearch/sam2.git"
+    SAM2_BUILD_CUDA=0 conda run -n "${ENV_NAME}" pip install "${SAM2_GIT}"
 fi
 
 # --- 4. Plugin directory ---------------------------------------------------
