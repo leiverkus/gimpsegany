@@ -29,7 +29,7 @@ Clone this repo, then run:
 bash install.command
 ```
 
-It creates (or reuses) a Python virtualenv at `~/.gimp-segany/venv` with PyTorch / OpenCV / huggingface_hub / sam2, copies `seganyplugin.py` and `seganybridge.py` into the right GIMP plug-ins folder, and seeds a default `segany_settings.json` pointing at `facebook/sam2.1-hiera-large` on Hugging Face — so the first run in GIMP works without any extra configuration. The script is idempotent and preserves an existing settings file.
+It creates (or reuses) a Python virtualenv at `~/.gimp-segany/venv` with PyTorch / OpenCV / huggingface_hub / sam2, copies the plug-in files into the right GIMP plug-ins folder, and seeds a default `segany_settings.json` pointing at `facebook/sam2.1-hiera-large` on Hugging Face — so the first run in GIMP works without any extra configuration. The script is idempotent and preserves an existing settings file.
 
 It uses [`uv`](https://docs.astral.sh/uv/) when present (it provisions Python 3.11 itself and installs fast) and falls back to the stdlib `venv` + `pip` otherwise. **No conda required.**
 
@@ -73,7 +73,7 @@ If you prefer to set things up by hand (Windows, or a custom environment), follo
 
 #### 1. Plugin files
 
-Copy this repo's `seganyplugin.py` and `seganybridge.py` into a `seganyplugin` folder inside GIMP's user plug-ins directory:
+Copy this repo's `seganyplugin.py`, `seganybridge.py` and `segany_backend.py` (all three are required) into a `seganyplugin` folder inside GIMP's user plug-ins directory:
 
 - **Windows:** `C:\Users\[YourUsername]\AppData\Roaming\GIMP\3.x\plug-ins\seganyplugin\`
 - **Linux:** `~/.config/GIMP/3.x/plug-ins/seganyplugin/`

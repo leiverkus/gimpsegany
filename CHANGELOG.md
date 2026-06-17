@@ -7,7 +7,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Tagging `vX.Y.Z` triggers the release workflow, which builds the plugin zip and
 publishes a GitHub release (a `-rc`/`-beta` suffix marks it as a pre-release).
 
-## [Unreleased]
+## [3.1.0] - 2026-06-17
 
 ### Added
 - Experimental GIMP extension package (`gimp-segany.gex`, built by
@@ -73,5 +73,6 @@ SAM 2.1 config auto-detection, editable path fields, a persistent caching
 bridge, Hugging Face checkpoint loading, the preset bar, Setup Check, and the
 auto-select / show-all-masks workflow.
 
+[3.1.0]: https://github.com/leiverkus/gimpsegany/compare/v3.0.0...v3.1.0
 [3.0.0]: https://github.com/leiverkus/gimpsegany/compare/v2.0.0...v3.0.0
 [2.0.0]: https://github.com/leiverkus/gimpsegany/releases/tag/v2.0.0

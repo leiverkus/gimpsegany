@@ -97,7 +97,7 @@ from segany_backend import (
 
 # Fork version. Keep in sync with __version__ in seganybridge.py and the latest
 # entry in CHANGELOG.md.
-__version__ = "3.0.0"
+__version__ = "3.1.0"
 
 
 gi.require_version("Gtk", "3.0")
