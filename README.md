@@ -10,7 +10,7 @@ The plugin supports both **Segment Anything 1 (SAM1)** and **Segment Anything 2 
 
 ## What's new in this fork
 
-- **Apple Silicon / MPS support** — SAM2 models load and run on macOS Apple Silicon via PyTorch's MPS backend. Falls back to CUDA, then CPU.
+- **Apple Silicon / MPS support** — SAM2 models load and run on macOS Apple Silicon via PyTorch's MPS backend. Falls back to CUDA, then CPU. If a run hits the known MPS `Placeholder storage` error, the bridge automatically reloads on CPU and retries — no source edits needed. Set `SEGANY_FORCE_CPU=1` to skip MPS entirely.
 - **SAM1 imports are optional** — the bridge no longer requires `segment_anything` to be installed when you only use SAM2.
 - **SAM 2.1 checkpoints** — the bridge auto-detects `sam2.1_*` checkpoint filenames and loads the matching configs from `configs/sam2.1/`.
 - **Editable path fields** — the Python and Checkpoint path fields in the plugin dialog accept typed/pasted paths (Entry + Browse button) instead of being limited to a file picker. The browse dialog also shows hidden files, which is required to reach `~/Library` on macOS.
@@ -130,7 +130,7 @@ At the top of the dialog, the **Preset** bar lets you save the current option co
 
 If *Run Setup Check* doesn't help, the common less-obvious failure modes are:
 
-- **`Placeholder storage has not been allocated on MPS device`** — known SAM2/MPS issue on Apple Silicon. Workaround: force CPU by editing the top of `seganybridge.py`'s `_select_device()` to return `"cpu"`. Slower but always works.
+- **`Placeholder storage has not been allocated on MPS device`** — known SAM2/MPS issue on Apple Silicon. The bridge now detects this error automatically, reloads the model on CPU, and retries the same job once (you'll see *"MPS backend failed; retrying on CPU…"* in the status bar). If you'd rather skip MPS entirely from the start, launch GIMP with `SEGANY_FORCE_CPU=1` in the environment — CPU is slower but always works.
 - **`Failed to build the SAM 2 CUDA extension`** during install — harmless on macOS; SAM2 falls back to its pure-PyTorch path.
 - **GIMP does not list the plugin** — check `Edit → Preferences → Folders → Plug-ins`. The installer places files under `…/GIMP/3.x/plug-ins/seganyplugin/`, where `3.x` must match GIMP's minor version. On Linux/macOS the `.py` files must be executable.
 - **Mask group is empty / only hidden layers** — you're on an older commit without the *Auto-select* default. Re-run `install.command` or copy the latest `seganyplugin.py` into the plug-ins folder.

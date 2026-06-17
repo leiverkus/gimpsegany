@@ -22,11 +22,17 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 """
 
+import os
+
+# Let PyTorch fall back to CPU for MPS ops that aren't implemented yet in the
+# Apple Silicon backend instead of crashing. Must be set before torch is
+# imported. Users can override by exporting the variable themselves.
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+
 import torch
 import numpy as np
 import cv2
 import sys
-import os
 import json
 
 # SAM2 imports
@@ -395,7 +401,34 @@ class SAM2Strategy(SegmentationStrategy):
             print(f"Removed temporary file: {self._temp_pth_path}")
 
 
+# Flipped to True once an MPS run fails with the known "Placeholder storage"
+# error so every subsequent (re)load in this process is built on CPU.
+_mps_disabled = False
+
+
+def _force_cpu_requested():
+    """Honour an explicit SEGANY_FORCE_CPU=1 escape hatch from the environment."""
+    return os.environ.get("SEGANY_FORCE_CPU", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _is_mps_failure(exc):
+    """Match the known Apple Silicon MPS errors that a CPU retry can recover."""
+    msg = str(exc).lower()
+    return (
+        "placeholder storage has not been allocated on mps" in msg
+        or "mpsndarray" in msg
+        or ("mps" in msg and "not currently implemented" in msg)
+    )
+
+
 def _select_device():
+    if _force_cpu_requested() or _mps_disabled:
+        return "cpu"
     if torch.backends.mps.is_available():
         return "mps"
     if torch.cuda.is_available():
@@ -472,10 +505,25 @@ def _prepare_model(checkpoint_path, model_type):
 
 
 def _run_test(model_type, checkpoint_path):
+    global _mps_disabled
     strategy, sam, device = _prepare_model(checkpoint_path, model_type)
     if sam is None:
         return 1
-    strategy.run_test(sam)
+    try:
+        strategy.run_test(sam)
+    except Exception as e:
+        if _mps_disabled or _force_cpu_requested() or not _is_mps_failure(e):
+            raise
+        print(
+            "MPS backend failed during test; retrying on CPU (slower)…",
+            file=sys.stderr,
+        )
+        _mps_disabled = True
+        strategy.cleanup()
+        strategy, sam, device = _prepare_model(checkpoint_path, model_type)
+        if sam is None:
+            return 1
+        strategy.run_test(sam)
     print("Success!!")
     # Structured line for the plugin's Setup Check button. Kept as the
     # final stdout line so the plugin can grep for `"setup_check"` and
@@ -537,12 +585,51 @@ def _run_inference(strategy, sam, params):
         raise ValueError(f"Unknown segmentation type: {seg_type}")
 
 
+def _process_job(params, cache, emit):
+    """Load (or reuse a cached) model and run one segmentation job."""
+    checkpoint_path = params["checkpoint_path"]
+    model_type = params.get("model_type", "auto")
+    cache_key = (checkpoint_path, model_type)
+    if cache_key in cache:
+        strategy, sam = cache[cache_key]
+        print(f"Reusing cached model for {os.path.basename(checkpoint_path)}")
+    else:
+        # First-load messaging: HF ids may trigger a ~900 MB download,
+        # local files just stream from disk — tell the user which.
+        if _is_hf_id(checkpoint_path):
+            emit({
+                "status": "progress",
+                "stage": "loading_model",
+                "text": f"Loading model from Hugging Face ({checkpoint_path})… (first run may download up to ~900 MB)",
+            })
+        else:
+            emit({
+                "status": "progress",
+                "stage": "loading_model",
+                "text": "Loading model…",
+            })
+        strategy, sam, _ = _prepare_model(checkpoint_path, model_type)
+        if sam is None:
+            raise RuntimeError("model load failed (see log above)")
+        # Temporary .pth (from .safetensors) is no longer needed once
+        # the model is built — drop it but keep the loaded model.
+        strategy.cleanup()
+        cache[cache_key] = (strategy, sam)
+    emit({
+        "status": "progress",
+        "stage": "inferring",
+        "text": f"Running {params.get('seg_type', 'segmentation').lower()} segmentation…",
+    })
+    _run_inference(strategy, sam, params)
+
+
 def _serve(real_stdout):
     """Daemon mode. Read JSON jobs from stdin, keep models loaded across jobs.
 
     All informational output goes to stderr; only single-line JSON status
     messages are written to ``real_stdout`` so the plugin can parse them.
     """
+    global _mps_disabled
     sys.stdout = sys.stderr  # any stray prints inside strategies go to stderr
 
     def _emit(obj):
@@ -564,45 +651,33 @@ def _serve(real_stdout):
             break
 
         try:
-            checkpoint_path = params["checkpoint_path"]
-            model_type = params.get("model_type", "auto")
-            cache_key = (checkpoint_path, model_type)
-            if cache_key in cache:
-                strategy, sam = cache[cache_key]
-                print(
-                    f"Reusing cached model for {os.path.basename(checkpoint_path)}"
-                )
-            else:
-                # First-load messaging: HF ids may trigger a ~900 MB download,
-                # local files just stream from disk — tell the user which.
-                if _is_hf_id(checkpoint_path):
-                    _emit({
-                        "status": "progress",
-                        "stage": "loading_model",
-                        "text": f"Loading model from Hugging Face ({checkpoint_path})… (first run may download up to ~900 MB)",
-                    })
-                else:
-                    _emit({
-                        "status": "progress",
-                        "stage": "loading_model",
-                        "text": "Loading model…",
-                    })
-                strategy, sam, _ = _prepare_model(checkpoint_path, model_type)
-                if sam is None:
-                    raise RuntimeError("model load failed (see log above)")
-                # Temporary .pth (from .safetensors) is no longer needed once
-                # the model is built — drop it but keep the loaded model.
-                strategy.cleanup()
-                cache[cache_key] = (strategy, sam)
-            _emit({
-                "status": "progress",
-                "stage": "inferring",
-                "text": f"Running {params.get('seg_type', 'segmentation').lower()} segmentation…",
-            })
-            _run_inference(strategy, sam, params)
+            _process_job(params, cache, _emit)
             print("Done!")
             _emit({"status": "done"})
         except Exception as e:
+            # Known Apple Silicon MPS failures are recoverable: rebuild the
+            # model on CPU (the cached one lives on the dead device) and retry
+            # the same job once.
+            if not _mps_disabled and not _force_cpu_requested() and _is_mps_failure(e):
+                print(
+                    "MPS backend failed; falling back to CPU (slower) and retrying…",
+                    file=sys.stderr,
+                )
+                _mps_disabled = True
+                cache.clear()
+                _emit({
+                    "status": "progress",
+                    "stage": "loading_model",
+                    "text": "MPS backend failed; retrying on CPU (slower)…",
+                })
+                try:
+                    _process_job(params, cache, _emit)
+                    print("Done!")
+                    _emit({"status": "done"})
+                    continue
+                except Exception as retry_exc:
+                    e = retry_exc
+
             import traceback
 
             traceback.print_exc(file=sys.stderr)
