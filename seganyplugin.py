@@ -9,8 +9,7 @@ from gi.repository import Gimp
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk
 
-gi.require_version("Gegl", "0.4")
-from gi.repository import Gio, Gegl
+from gi.repository import Gio
 from gi.repository import GLib
 
 # Give the plugin process a recognizable name. On Linux the task list and
@@ -82,7 +81,6 @@ import random
 import os
 import sys
 import glob
-import struct
 import json
 import logging
 
@@ -1099,8 +1097,10 @@ def _spawn_bridge(pythonPath, scriptPath):
 def bridgeRun(pythonPath, scriptPath, params, progress_cb=None):
     """Send a job to the (long-running) bridge and wait for the JSON result.
 
-    Returns (success, message). On failure ``message`` contains the most
-    recent bridge stderr output, which is shown to the user.
+    Returns (success, message, masks). On failure ``message`` contains the
+    most recent bridge stderr output, which is shown to the user, and ``masks``
+    is an empty list. On success ``masks`` is the bridge's per-mask metadata
+    list (``{"file", "coverage"}`` each, ranked best-first).
 
     ``progress_cb`` — if supplied, called as ``progress_cb(text, stage)``
     for every ``{"status": "progress", ...}`` line the bridge emits before
@@ -1119,14 +1119,14 @@ def bridgeRun(pythonPath, scriptPath, params, progress_cb=None):
                 _shutdown_bridge()
             proc, err = _spawn_bridge(pythonPath, scriptPath)
             if proc is None:
-                return False, err
+                return False, err, []
 
         try:
             proc.stdin.write(json.dumps(params) + "\n")
             proc.stdin.flush()
         except Exception as e:
             _shutdown_bridge()
-            return False, f"Failed to send job to bridge: {e}"
+            return False, f"Failed to send job to bridge: {e}", []
 
         # Read status lines until we see a terminal one (done/error). The
         # bridge may emit any number of {"status": "progress"} lines first.
@@ -1136,7 +1136,7 @@ def bridgeRun(pythonPath, scriptPath, params, progress_cb=None):
                 # bridge died
                 _shutdown_bridge()
                 tail = "".join(_bridge_stderr_buf)
-                return False, "Bridge died unexpectedly.\n\n" + tail
+                return False, "Bridge died unexpectedly.\n\n" + tail, []
 
             try:
                 status = json.loads(status_line)
@@ -1154,7 +1154,7 @@ def bridgeRun(pythonPath, scriptPath, params, progress_cb=None):
                         pass  # never let a UI hiccup break the bridge loop
                 continue
             if kind == "done":
-                return True, ""
+                return True, "", status.get("masks", [])
             # Error path: combine the JSON summary with the tail of stderr,
             # because the bridge's generic message ("model load failed (see
             # log above)") hides the real traceback from the user — and from
@@ -1163,51 +1163,8 @@ def bridgeRun(pythonPath, scriptPath, params, progress_cb=None):
             msg = status.get("message", "unknown bridge error")
             stderr_tail = "".join(_bridge_stderr_buf).strip()
             if stderr_tail:
-                return False, f"{msg}\n\n{stderr_tail}"
-            return False, msg
-
-
-def unpackBoolArray(filepath):
-    with open(filepath, "rb") as file:
-        packed_data = bytearray(file.read())
-
-    byte_index = 8  # Skip the first 8 bytes for num_rows and num_cols
-
-    num_rows = struct.unpack(">I", packed_data[:4])[0]
-    num_cols = struct.unpack(">I", packed_data[4:8])[0]
-
-    unpacked_data = []
-    bit_position = 0
-
-    for _ in range(num_rows):
-        unpacked_row = []
-        for _ in range(num_cols):
-            if bit_position == 0:
-                current_byte = packed_data[byte_index]
-                byte_index += 1
-
-            boolean_value = (current_byte >> bit_position) & 1
-            unpacked_row.append(boolean_value)
-            bit_position += 1
-
-            if bit_position == 8:
-                bit_position = 0
-
-        unpacked_data.append(unpacked_row)
-
-    return unpacked_data
-
-
-def readMaskFile(filepath, formatBinary):
-    if formatBinary:
-        return unpackBoolArray(filepath)
-    else:
-        mask = []
-        with open(filepath, "r") as f:
-            lines = f.readlines()
-        for line in lines:
-            mask.append([val == "1" for val in line])
-        return mask
+                return False, f"{msg}\n\n{stderr_tail}", []
+            return False, msg, []
 
 
 def exportSelection(image, expfile, exportCnt):
@@ -1249,111 +1206,62 @@ def exportSelection(image, expfile, exportCnt):
             f.write(str(co[0]) + " " + str(co[1]) + "\n")
 
 
-def getRandomColor(layerCnt):
-    uniqueColors = set()
-    while len(uniqueColors) < layerCnt:
-        red = random.randint(0, 255)
-        green = random.randint(0, 255)
-        blue = random.randint(0, 255)
+def _loadMaskLayer(image, filepath):
+    """Load a mask PNG straight into ``image`` as a layer.
 
-        color = (red, green, blue)
+    The bridge already wrote the mask as a colored RGBA PNG (opaque over the
+    mask, transparent elsewhere), so we just drop it in — GIMP converts the
+    layer to the image's type, and its alpha channel doubles as the selection
+    mask for "auto-select". Returns the new Gimp.Layer.
+    """
+    procedure = Gimp.get_pdb().lookup_procedure("gimp-file-load-layer")
+    config = procedure.create_config()
+    config.set_property("run-mode", Gimp.RunMode.NONINTERACTIVE)
+    config.set_property("image", image)
+    config.set_property("file", Gio.File.new_for_path(filepath))
+    result = procedure.run(config)
+    return result.index(1)
 
-        if color not in uniqueColors:
-            uniqueColors.add(color)
-    return list(uniqueColors)
 
+def createLayers(image, maskMeta, values):
+    """Build the mask layer group from the bridge's per-mask PNG list.
 
-def createLayers(image, maskFileNoExt, userSelColor, formatBinary, values):
-    width, height = image.get_width(), image.get_height()
-    total_pixels = max(width * height, 1)
-
-    idx = 0
-    maxLayers = 99999
-
+    ``maskMeta`` is the list the bridge returns: ``{"file", "coverage"}`` per
+    mask, already ranked by SAM score (first = best). Returns
+    ``(count, parentGroup, topLayer)``.
+    """
     parent = Gimp.GroupLayer.new(image)
     parent.set_name(f"Segment Anything - {values.segType}")
     image.insert_layer(parent, None, 0)
     parent.set_opacity(50)
 
-    uniqueColors = getRandomColor(layerCnt=999)
+    top_layer = None  # first mask (SAM ranks by score, so it's the best)
 
-    if image.get_base_type() == Gimp.ImageType.GRAYA_IMAGE:
-        layerType = Gimp.ImageType.GRAYA_IMAGE
-        userSelColor = [100, 255]
-        babl_format = "YA u8"
-        pix_size = 2
-    else:
-        layerType = Gimp.ImageType.RGBA_IMAGE
-        babl_format = "RGBA u8"
-        pix_size = 4
+    for idx, entry in enumerate(maskMeta):
+        filepath = entry.get("file")
+        if not filepath or not exists(filepath):
+            continue
+        print("Creating Layer..", (idx + 1))
+        newlayer = _loadMaskLayer(image, filepath)
+        image.insert_layer(newlayer, parent, 0)
 
-    top_layer = None  # first mask created (SAM ranks by score, so it's the best)
+        # Name includes coverage so the layer list is self-describing and easy
+        # to sort/pick from — the top mask isn't always #1.
+        coverage_pct = float(entry.get("coverage", 0.0))
+        newlayer.set_name(
+            f"Mask - {values.segType} #{idx + 1} ({coverage_pct:.1f}%)"
+        )
 
-    while idx < maxLayers:
-        filepath = maskFileNoExt + str(idx) + ".seg"
-        if exists(filepath):
-            print("Creating Layer..", (idx + 1))
-            newlayer = Gimp.Layer.new(
-                image,
-                f"Mask - {values.segType} #{idx + 1}",
-                width,
-                height,
-                layerType,
-                100.0,
-                Gimp.LayerMode.NORMAL,
-            )
-            buffer = newlayer.get_buffer()
-            image.insert_layer(newlayer, parent, 0)
+        # Hide all masks except the first (best-scoring) one so the user sees
+        # something immediately instead of an empty layer group — unless "Show
+        # all masks" is on, in which case keep every layer visible so the user
+        # can compare candidates directly.
+        if idx == 0:
+            top_layer = newlayer
+        elif not values.showAllMasks:
+            newlayer.set_visible(False)
 
-            rect = Gegl.Rectangle.new(0, 0, width, height)
-
-            maskVals = readMaskFile(filepath, formatBinary)
-            maskColor = (
-                userSelColor
-                if userSelColor is not None
-                else list(uniqueColors[idx]) + [255]
-            )
-
-            mask_color_bytes = bytes(maskColor)
-            transparent_pixel = bytes(pix_size)
-            row_byte_strings = []
-            white_pixels = 0
-            for row in maskVals:
-                row_pixels = []
-                for p in row:
-                    if p:
-                        white_pixels += 1
-                        row_pixels.append(mask_color_bytes)
-                    else:
-                        row_pixels.append(transparent_pixel)
-                row_byte_strings.append(b"".join(row_pixels))
-            pixels = b"".join(row_byte_strings)
-
-            buffer.set(rect, babl_format, pixels)
-
-            # Rename to include coverage so the layer list is self-describing
-            # and easy to sort/pick from — the top mask isn't always #1.
-            coverage_pct = (white_pixels / total_pixels) * 100.0
-            newlayer.set_name(
-                f"Mask - {values.segType} #{idx + 1} ({coverage_pct:.1f}%)"
-            )
-
-            # Hide all masks except the first (best-scoring) one so the user
-            # sees something immediately instead of an empty layer group —
-            # unless "Show all masks" is on, in which case keep every layer
-            # visible so the user can compare candidates directly.
-            if idx == 0:
-                top_layer = newlayer
-            elif not values.showAllMasks:
-                newlayer.set_visible(False)
-
-            idx += 1
-            newlayer.update(0, 0, width, height)
-        else:
-            break
-    # Gimp.displays_flush()  # turn on only if needed
-
-    return idx, parent, top_layer
+    return len(maskMeta), parent, top_layer
 
 
 def cleanup(filepathPrefix):
@@ -1427,7 +1335,6 @@ def run_segmentation(image, values):
 
     pythonPath = values.pythonPath or "python"
 
-    formatBinary = True
     filePrefix = "__seg__"
     filepathPrefix = os.path.join(tempfile.gettempdir(), filePrefix)
     selFile = filepathPrefix + "sel__.txt"
@@ -1447,7 +1354,9 @@ def run_segmentation(image, values):
         "seg_type": values.segType,
         "mask_type": values.maskType,
         "save_prefix": maskFileNoExt,
-        "format_binary": formatBinary,
+        # [r, g, b] for a fixed mask colour, or None for a random colour per
+        # mask. The bridge bakes the colour into each PNG.
+        "mask_color": None if values.isRandomColor else values.maskColor[:3],
     }
 
     if values.segType == "Auto":
@@ -1527,7 +1436,7 @@ def run_segmentation(image, values):
             pass
 
     try:
-        success, stderr_text = bridgeRun(
+        success, stderr_text, maskMeta = bridgeRun(
             pythonPath, scriptFilepath, params, progress_cb=_progress
         )
     finally:
@@ -1539,10 +1448,7 @@ def run_segmentation(image, values):
         showError("Segment Anything bridge failed:\n\n" + _translate_error(raw))
         return
 
-    layerMaskColor = None if values.isRandomColor else values.maskColor
-    _count, parent_group, top_layer = createLayers(
-        image, maskFileNoExt, layerMaskColor, formatBinary, values
-    )
+    _count, parent_group, top_layer = createLayers(image, maskMeta, values)
     cleanup(filepathPrefix)
 
     if values.autoSelectTopMask and top_layer is not None:

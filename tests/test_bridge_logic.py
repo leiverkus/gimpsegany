@@ -9,6 +9,8 @@ sam2. seganybridge guards those heavy imports, so it stays importable here.
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import seganybridge as b  # noqa: E402
@@ -142,3 +144,47 @@ class TestForceCpuRequested:
         for v in ("0", "false", "", "no"):
             monkeypatch.setenv("SEGANY_FORCE_CPU", v)
             assert b._force_cpu_requested() is False
+
+
+class TestSaveMasks:
+    """Round-trip the mask PNG writer. Needs numpy + OpenCV, so it skips in the
+    dependency-free CI run and exercises the real writer where they exist."""
+
+    @pytest.fixture(autouse=True)
+    def _deps(self):
+        self.np = pytest.importorskip("numpy")
+        self.cv2 = pytest.importorskip("cv2")
+
+    def _mask(self, h, w, true_cells):
+        m = self.np.zeros((h, w), dtype=bool)
+        for (y, x) in true_cells:
+            m[y, x] = True
+        return m
+
+    def test_fixed_color_and_alpha(self, tmp_path):
+        prefix = str(tmp_path / "m_")
+        mask = self._mask(4, 5, [(0, 0), (1, 2), (3, 4)])
+        meta = b.saveMasks([mask], prefix, color=[10, 20, 30])
+
+        assert len(meta) == 1
+        assert meta[0]["file"] == prefix + "0.png"
+        img = self.cv2.imread(meta[0]["file"], self.cv2.IMREAD_UNCHANGED)
+        assert img.shape == (4, 5, 4)  # H, W, BGRA
+        # mask cell: BGRA == (b=30, g=20, r=10, a=255)
+        assert list(img[0, 0]) == [30, 20, 10, 255]
+        # background cell: fully transparent
+        assert list(img[0, 1]) == [0, 0, 0, 0]
+
+    def test_coverage_percentage(self, tmp_path):
+        prefix = str(tmp_path / "m_")
+        mask = self._mask(2, 2, [(0, 0)])  # 1 of 4 pixels
+        meta = b.saveMasks([mask], prefix, color=[255, 0, 0])
+        assert meta[0]["coverage"] == pytest.approx(25.0)
+
+    def test_multiple_masks_random_color(self, tmp_path):
+        prefix = str(tmp_path / "m_")
+        masks = [self._mask(3, 3, [(0, 0)]), self._mask(3, 3, [(1, 1), (2, 2)])]
+        meta = b.saveMasks(masks, prefix, color=None)
+        assert [m["file"] for m in meta] == [prefix + "0.png", prefix + "1.png"]
+        for m in meta:
+            assert os.path.exists(m["file"])

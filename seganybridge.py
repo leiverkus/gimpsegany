@@ -26,6 +26,7 @@ import os
 import sys
 import json
 import argparse
+import random
 
 # Let PyTorch fall back to CPU for MPS ops that aren't implemented yet in the
 # Apple Silicon backend instead of crashing. Must be set before torch is
@@ -103,48 +104,37 @@ except ImportError:
 # --- Utility Functions ---
 
 
-def packBoolArray(filepath, arr):
-    packed_data = bytearray()
-    num_rows = len(arr)
-    num_cols = len(arr[0])
-    packed_data.extend(
-        [num_rows >> 24, (num_rows >> 16) & 255, (num_rows >> 8) & 255, num_rows & 255]
-    )
-    packed_data.extend(
-        [num_cols >> 24, (num_cols >> 16) & 255, (num_cols >> 8) & 255, num_cols & 255]
-    )
-    current_byte = 0
-    bit_position = 0
-    for row in arr:
-        for boolean_value in row:
-            if boolean_value:
-                current_byte |= 1 << bit_position
-            bit_position += 1
-            if bit_position == 8:
-                packed_data.append(current_byte)
-                current_byte = 0
-                bit_position = 0
-    if bit_position > 0:
-        packed_data.append(current_byte)
-    with open(filepath, "wb") as f:
-        f.write(packed_data)
-    return packed_data
+def saveMasks(masks, saveFileNoExt, color=None):
+    """Write each binary mask as a colored RGBA PNG and return its metadata.
 
+    The mask region is painted with ``color`` (opaque) and everything else is
+    transparent, so the plugin can load the file straight into a layer with
+    ``gimp-file-load-layer`` — no custom format and no per-pixel work on either
+    side. The alpha channel doubles as the selection mask for "auto-select".
 
-def saveMask(filepath, maskArr, formatBinary):
-    if formatBinary:
-        packBoolArray(filepath, maskArr)
-    else:
-        with open(filepath, "w") as f:
-            for row in maskArr:
-                f.write("".join(str(int(val)) for val in row) + "\n")
-
-
-def saveMasks(masks, saveFileNoExt, formatBinary):
+    color: ``[r, g, b]`` used for every mask, or ``None`` for a random colour
+    per mask. Returns a list of ``{"file": <path>, "coverage": <percent>}``.
+    """
+    meta = []
     for i, mask in enumerate(masks):
-        filepath = saveFileNoExt + str(i) + ".seg"
-        arr = [[val for val in row] for row in mask]
-        saveMask(filepath, arr, formatBinary)
+        m = np.asarray(mask).astype(bool)
+        h, w = m.shape
+        if color is not None:
+            r, g, b = int(color[0]), int(color[1]), int(color[2])
+        else:
+            r, g, b = (
+                random.randint(0, 255),
+                random.randint(0, 255),
+                random.randint(0, 255),
+            )
+        # OpenCV writes channels in BGRA order.
+        bgra = np.zeros((h, w, 4), dtype=np.uint8)
+        bgra[m] = (b, g, r, 255)
+        filepath = saveFileNoExt + str(i) + ".png"
+        cv2.imwrite(filepath, bgra)
+        coverage = float(m.sum()) / float(max(h * w, 1)) * 100.0
+        meta.append({"file": filepath, "coverage": coverage})
+    return meta
 
 
 # --- Strategy Pattern Implementation ---
@@ -157,14 +147,14 @@ class SegmentationStrategy:
     def load_model(self, checkPtFilePath, modelType):
         raise NotImplementedError
 
-    def segment_auto(self, sam, cvImage, saveFileNoExt, formatBinary, **kwargs):
+    def segment_auto(self, sam, cvImage, saveFileNoExt, color, **kwargs):
         raise NotImplementedError
 
-    def segment_box(self, sam, cvImage, maskType, boxCos, saveFileNoExt, formatBinary):
+    def segment_box(self, sam, cvImage, maskType, boxCos, saveFileNoExt, color):
         raise NotImplementedError
 
     def segment_sel(
-        self, sam, cvImage, maskType, selFile, boxCos, saveFileNoExt, formatBinary
+        self, sam, cvImage, maskType, selFile, boxCos, saveFileNoExt, color
     ):
         raise NotImplementedError
 
@@ -213,13 +203,13 @@ class SAM1Strategy(SegmentationStrategy):
             print(f"Error loading SAM1 model: {e}")
             return None
 
-    def segment_auto(self, sam, cvImage, saveFileNoExt, formatBinary, **kwargs):
+    def segment_auto(self, sam, cvImage, saveFileNoExt, color, **kwargs):
         mask_generator = SamAutomaticMaskGenerator_SAM1(sam)
         masks = mask_generator.generate(cvImage)
         masks = [mask["segmentation"] for mask in masks]
-        saveMasks(masks, saveFileNoExt, formatBinary)
+        return saveMasks(masks, saveFileNoExt, color)
 
-    def segment_box(self, sam, cvImage, maskType, boxCos, saveFileNoExt, formatBinary):
+    def segment_box(self, sam, cvImage, maskType, boxCos, saveFileNoExt, color):
         predictor = SamPredictor(sam)
         predictor.set_image(cvImage)
         input_box = np.array(boxCos)
@@ -229,10 +219,10 @@ class SAM1Strategy(SegmentationStrategy):
             box=input_box,
             multimask_output=(maskType == "Multiple"),
         )
-        saveMasks(masks, saveFileNoExt, formatBinary)
+        return saveMasks(masks, saveFileNoExt, color)
 
     def segment_sel(
-        self, sam, cvImage, maskType, selFile, boxCos, saveFileNoExt, formatBinary
+        self, sam, cvImage, maskType, selFile, boxCos, saveFileNoExt, color
     ):
         pts = []
         with open(selFile, "r") as f:
@@ -251,7 +241,7 @@ class SAM1Strategy(SegmentationStrategy):
             box=input_box,
             multimask_output=(maskType == "Multiple"),
         )
-        saveMasks(masks, saveFileNoExt, formatBinary)
+        return saveMasks(masks, saveFileNoExt, color)
 
     def run_test(self, sam):
         npArr = np.zeros((50, 50), np.uint8)
@@ -383,7 +373,7 @@ class SAM2Strategy(SegmentationStrategy):
             self.cleanup()
             return None
 
-    def segment_auto(self, sam, cvImage, saveFileNoExt, formatBinary, **kwargs):
+    def segment_auto(self, sam, cvImage, saveFileNoExt, color, **kwargs):
         points_per_side = 32
         if kwargs.get("segRes") == "Low":
             points_per_side = 16
@@ -397,9 +387,9 @@ class SAM2Strategy(SegmentationStrategy):
         )
         masks = mask_generator.generate(cvImage)
         masks = [mask["segmentation"] for mask in masks]
-        saveMasks(masks, saveFileNoExt, formatBinary)
+        return saveMasks(masks, saveFileNoExt, color)
 
-    def segment_box(self, sam, cvImage, maskType, boxCos, saveFileNoExt, formatBinary):
+    def segment_box(self, sam, cvImage, maskType, boxCos, saveFileNoExt, color):
         predictor = SAM2ImagePredictor(sam)
         predictor.set_image(cvImage)
         input_box = np.array(boxCos)
@@ -409,10 +399,10 @@ class SAM2Strategy(SegmentationStrategy):
             box=input_box,
             multimask_output=(maskType == "Multiple"),
         )
-        saveMasks(masks, saveFileNoExt, formatBinary)
+        return saveMasks(masks, saveFileNoExt, color)
 
     def segment_sel(
-        self, sam, cvImage, maskType, selFile, boxCos, saveFileNoExt, formatBinary
+        self, sam, cvImage, maskType, selFile, boxCos, saveFileNoExt, color
     ):
         pts = []
         with open(selFile, "r") as f:
@@ -431,7 +421,7 @@ class SAM2Strategy(SegmentationStrategy):
             box=input_box,
             multimask_output=(maskType == "Multiple"),
         )
-        saveMasks(masks, saveFileNoExt, formatBinary)
+        return saveMasks(masks, saveFileNoExt, color)
 
     def run_test(self, sam):
         npArr = np.zeros((50, 50), np.uint8)
@@ -586,12 +576,17 @@ def _run_test(model_type, checkpoint_path):
 
 
 def _run_inference(strategy, sam, params):
-    """Run a single segmentation using an already-loaded model."""
+    """Run a single segmentation using an already-loaded model.
+
+    Returns the list of per-mask metadata from saveMasks (file path + coverage).
+    """
     image_path = params["image_path"]
     seg_type = params["seg_type"]
     mask_type = params.get("mask_type", "Multiple")
     save_prefix = params["save_prefix"]
-    format_binary = params.get("format_binary", True)
+    # [r, g, b] for a fixed mask colour, or None/absent for a random colour
+    # per mask (chosen here so the plugin needs no pixel access).
+    color = params.get("mask_color")
 
     cvImage = cv2.imread(image_path)
     if cvImage is None:
@@ -607,27 +602,27 @@ def _run_inference(strategy, sam, params):
                 auto_kwargs["cropNLayers"] = int(params["crop_n_layers"])
             if "min_mask_area" in params:
                 auto_kwargs["minMaskArea"] = int(params["min_mask_area"])
-        strategy.segment_auto(
-            sam, cvImage, save_prefix, format_binary, **auto_kwargs
+        return strategy.segment_auto(
+            sam, cvImage, save_prefix, color, **auto_kwargs
         )
     elif seg_type in {"Selection", "Box-Selection"}:
-        strategy.segment_sel(
+        return strategy.segment_sel(
             sam,
             cvImage,
             mask_type,
             params["sel_file"],
             params.get("box_coords"),
             save_prefix,
-            format_binary,
+            color,
         )
     elif seg_type == "Box":
-        strategy.segment_box(
+        return strategy.segment_box(
             sam,
             cvImage,
             mask_type,
             params["box_coords"],
             save_prefix,
-            format_binary,
+            color,
         )
     else:
         raise ValueError(f"Unknown segmentation type: {seg_type}")
@@ -668,7 +663,7 @@ def _process_job(params, cache, emit):
         "stage": "inferring",
         "text": f"Running {params.get('seg_type', 'segmentation').lower()} segmentation…",
     })
-    _run_inference(strategy, sam, params)
+    return _run_inference(strategy, sam, params)
 
 
 def _serve(real_stdout):
@@ -699,9 +694,9 @@ def _serve(real_stdout):
             break
 
         try:
-            _process_job(params, cache, _emit)
+            masks = _process_job(params, cache, _emit)
             print("Done!")
-            _emit({"status": "done"})
+            _emit({"status": "done", "masks": masks or []})
         except Exception as e:
             # Known Apple Silicon MPS failures are recoverable: rebuild the
             # model on CPU (the cached one lives on the dead device) and retry
@@ -719,9 +714,9 @@ def _serve(real_stdout):
                     "text": "MPS backend failed; retrying on CPU (slower)…",
                 })
                 try:
-                    _process_job(params, cache, _emit)
+                    masks = _process_job(params, cache, _emit)
                     print("Done!")
-                    _emit({"status": "done"})
+                    _emit({"status": "done", "masks": masks or []})
                     continue
                 except Exception as retry_exc:
                     e = retry_exc
