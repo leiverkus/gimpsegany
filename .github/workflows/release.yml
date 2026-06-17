@@ -3,7 +3,8 @@ name: Create Release
 on:
   push:
     tags:
-      - '*'
+      # Version tags only, e.g. v1.0.0 (stable) or v1.0.0-rc1 (prerelease).
+      - 'v*'
 
 jobs:
   build:
@@ -14,24 +15,33 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Classify release
+        id: relmeta
+        run: |
+          # Semver convention: a pre-release tag carries a hyphen suffix
+          # (v1.0.0-rc1, v1.0.0-beta). A plain version is a stable release.
+          case "${GITHUB_REF_NAME}" in
+            *-*) echo "prerelease=true"  >> "$GITHUB_OUTPUT" ;;
+            *)   echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+
       - name: Create GIMP 3 Plugin Zip
         run: |
           mkdir seganyplugin
-          cp seganyplugin.py seganybridge.py seganyplugin/
+          cp seganyplugin.py seganybridge.py README.md seganyplugin/
           zip -r gimp-segany-gimp3.zip seganyplugin
 
       # - name: Create GIMP 2 Plugin Zip
-      #   run: zip gimp-segany-gimp2.zip seganyplugin_GIMP2.py seganybridge_GIMP2_SAM1.py
+      #   run: zip gimp-segany-gimp2.zip legacy/seganyplugin_GIMP2.py legacy/seganybridge_GIMP2_SAM1.py
 
       - name: Create Release
         id: create_release
         uses: softprops/action-gh-release@v2
         with:
-          name: Latest Development Build
-          body: |
-            This release contains the latest development builds of the GIMP plugins.
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
           draft: false
-          prerelease: true
+          prerelease: ${{ steps.relmeta.outputs.prerelease }}
           files: |
             gimp-segany-gimp3.zip
             # gimp-segany-gimp2.zip
