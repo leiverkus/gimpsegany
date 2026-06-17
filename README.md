@@ -29,9 +29,11 @@ Clone this repo, then run:
 bash install.command
 ```
 
-It creates (or reuses) a `sam2` conda env, installs PyTorch / OpenCV / huggingface_hub / sam2, copies `seganyplugin.py` and `seganybridge.py` into the right GIMP plug-ins folder, and seeds a default `segany_settings.json` pointing at `facebook/sam2.1-hiera-large` on Hugging Face — so the first run in GIMP works without any extra configuration. The script is idempotent and preserves an existing settings file.
+It creates (or reuses) a Python virtualenv at `~/.gimp-segany/venv` with PyTorch / OpenCV / huggingface_hub / sam2, copies `seganyplugin.py` and `seganybridge.py` into the right GIMP plug-ins folder, and seeds a default `segany_settings.json` pointing at `facebook/sam2.1-hiera-large` on Hugging Face — so the first run in GIMP works without any extra configuration. The script is idempotent and preserves an existing settings file.
 
-Requirements: GIMP 3 already installed, and Miniforge/Miniconda on your `PATH` (https://github.com/conda-forge/miniforge).
+It uses [`uv`](https://docs.astral.sh/uv/) when present (it provisions Python 3.11 itself and installs fast) and falls back to the stdlib `venv` + `pip` otherwise. **No conda required.**
+
+Requirements: GIMP 3 already installed, and either `uv` on your `PATH` (`curl -LsSf https://astral.sh/uv/install.sh | sh`) or an existing Python 3.10+.
 
 Then restart GIMP and use `Image → Segment Anything Layers`. The first segmentation downloads the SAM 2.1 Large weights from Hugging Face (~900 MB, cached under `~/.cache/huggingface`); the GIMP status bar shows the download and load progress.
 
@@ -45,9 +47,9 @@ Clone this repo, then run:
 bash install-linux.sh
 ```
 
-It does the same as the macOS installer: creates (or reuses) a `sam2` conda env, installs PyTorch / OpenCV / huggingface_hub / sam2, copies the plugin files into GIMP's per-user plug-ins folder, and seeds a default `segany_settings.json`. On Linux `pip install torch` pulls the CUDA-enabled wheels, so GPU machines work out of the box (and CPU-only machines still run). It auto-detects both a standard `~/.config/GIMP` install and a Flatpak install under `~/.var/app/org.gimp.GIMP/`. The script is idempotent and preserves an existing settings file.
+It does the same as the macOS installer (uv when present, stdlib `venv` + `pip` otherwise — **no conda**): builds the `~/.gimp-segany/venv` backend, copies the plugin files into GIMP's per-user plug-ins folder, and seeds a default `segany_settings.json`. On Linux pip pulls the CUDA-enabled torch wheels, so GPU machines work out of the box (and CPU-only machines still run). It auto-detects both a standard `~/.config/GIMP` install and a Flatpak install under `~/.var/app/org.gimp.GIMP/`. The script is idempotent and preserves an existing settings file.
 
-Requirements: GIMP 3 already installed and launched once, and Miniforge/Miniconda on your `PATH` (https://github.com/conda-forge/miniforge).
+Requirements: GIMP 3 already installed and launched once, and either `uv` on your `PATH` (`curl -LsSf https://astral.sh/uv/install.sh | sh`) or an existing Python 3.10+.
 
 ### Manual install
 
@@ -65,18 +67,27 @@ Replace `3.x` with the minor version that matches your GIMP install (e.g. `3.2`)
 
 #### 2. Python environment
 
-Create a Python environment with the SAM2 backend. On macOS the bundled `environment-macos.yml` is the easiest path:
+Create a Python environment with the SAM2 backend. The dependencies are pinned in [`requirements-lock.txt`](requirements-lock.txt) (a known-good set captured from a working env) and `sam2` is pinned to an exact git commit, so installs are reproducible. Any Python 3.10+ works (3.11 recommended); no conda needed.
+
+With [`uv`](https://docs.astral.sh/uv/) (recommended — provisions Python and installs fast):
 
 ```bash
-conda env create -f environment-macos.yml   # run from the repo root
-conda activate sam2
-SAM2_BUILD_CUDA=0 pip install \
+uv venv --python 3.11 ~/.gimp-segany/venv
+uv pip install --python ~/.gimp-segany/venv/bin/python -r requirements-lock.txt
+SAM2_BUILD_CUDA=0 uv pip install --python ~/.gimp-segany/venv/bin/python \
   "git+https://github.com/facebookresearch/sam2.git@2b90b9f5ceec907a1c18123530e92e794ad901a4"
 ```
 
-The Python dependencies are pinned in [`requirements-lock.txt`](requirements-lock.txt) (a known-good set captured from a working env), and `sam2` is pinned to an exact git commit above, so installs are reproducible. The `environment-macos.yml` pulls in the lock file automatically. To create the env without conda, use `pip install -r requirements-lock.txt` into any Python 3.11 venv, then the `sam2` line above.
+Or with the stdlib `venv` + `pip` (needs Python 3.10+ already installed):
 
-On Linux the same `requirements-lock.txt` works — `pip install -r requirements-lock.txt` pulls the CUDA-enabled torch wheels — followed by the pinned `sam2` line.
+```bash
+python3 -m venv ~/.gimp-segany/venv
+~/.gimp-segany/venv/bin/pip install -r requirements-lock.txt
+SAM2_BUILD_CUDA=0 ~/.gimp-segany/venv/bin/pip install \
+  "git+https://github.com/facebookresearch/sam2.git@2b90b9f5ceec907a1c18123530e92e794ad901a4"
+```
+
+On Linux pip pulls the CUDA-enabled torch wheels automatically. Set the plugin's **Python3 Path** to `~/.gimp-segany/venv/bin/python` (the **Detect…** button finds it).
 
 For SAM1 support (optional), additionally run `pip install "git+https://github.com/facebookresearch/segment-anything.git@dca509fe793f601edb92606367a655c15ac00fdf"` and download one of the `sam_vit_*.pth` checkpoints.
 
@@ -86,7 +97,7 @@ To bump the pins later: install the latest versions, verify a segmentation works
 
 Open GIMP, then `Image → Segment Anything Layers`, and set:
 
-- **Python3 Path** — the interpreter with SAM2 installed (e.g. `/opt/miniconda3/envs/sam2/bin/python`). The **Detect…** button lists conda envs it finds automatically.
+- **Python3 Path** — the interpreter with SAM2 installed (e.g. `~/.gimp-segany/venv/bin/python` from the installer). The **Detect…** button lists it (and any other envs it finds) automatically.
 - **Model Source** — pick one of the curated SAM 2.1 entries to load via Hugging Face, or choose *Custom checkpoint* and point at a local `.pt` / `.safetensors`.
 
 Click **Run Setup Check** to verify the combo works before running a real segmentation. Values are persisted to `segany_settings.json` next to the plugin files.
@@ -101,7 +112,7 @@ At the top of the dialog, the **Preset** bar lets you save the current option co
 
 **Interpreter & model:**
 
-- **Python3 Path** — the python used to run `seganybridge.py`. Type/paste a path, click *Browse…*, or click *Detect…* to pick from conda envs found under `~/miniconda3/envs`, `~/anaconda3/envs`, `~/mambaforge/envs`, `~/miniforge3/envs`, plus Homebrew/system python3s.
+- **Python3 Path** — the python used to run `seganybridge.py`. Type/paste a path, click *Browse…*, or click *Detect…* to pick the `~/.gimp-segany/venv` interpreter the installer creates, plus any legacy conda envs and Homebrew/system python3s it still finds.
 - **Model Source** — curated Hugging Face presets (SAM 2.1 Large / Base+ / Small / Tiny). Picking one fills *Checkpoint Path* with the HF id and aligns *Model Type*; on first run the weights are downloaded via `huggingface_hub` and cached under `~/.cache/huggingface`. Choose *— Custom checkpoint —* to point at a local file instead.
 - **Model Type** — `Auto` infers from the checkpoint name (`sam_*` → SAM1, `sam2*` / `sam2.1*` → SAM2). Override when auto-detection picks the wrong variant.
 - **Model Checkpoint** — either a full path to a `.pt` / `.pth` / `.safetensors` file, or a Hugging Face repo id like `facebook/sam2.1-hiera-large`.

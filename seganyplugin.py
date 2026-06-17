@@ -102,12 +102,16 @@ def _looks_like_hf_id(path):
     return path.count("/") == 1
 
 
+# Where the bundled installers (install.command / install-linux.sh) create the
+# SAM2 backend virtualenv. Kept in sync with the SEGANY_VENV in those scripts.
+SEGANY_VENV_PY = os.path.expanduser("~/.gimp-segany/venv/bin/python")
+
+
 def _default_python_search_dir():
     """Best-guess start directory for the python interpreter file picker."""
     for candidate in (
-        "/opt/miniconda3/envs",
-        os.path.expanduser("~/miniconda3/envs"),
-        os.path.expanduser("~/anaconda3/envs"),
+        os.path.dirname(SEGANY_VENV_PY),
+        os.path.expanduser("~/.gimp-segany"),
         "/opt/homebrew/bin",
         "/usr/local/bin",
         "/usr/bin",
@@ -120,14 +124,20 @@ def _default_python_search_dir():
 def _discover_python_candidates():
     """Enumerate plausible python3 interpreters for the Detect menu.
 
-    Returns (label, absolute_path) tuples for every conda/mamba env under
-    the usual roots plus a few system pythons. Used to populate a dropdown
-    menu next to the Python path field so users don't have to hand-type or
-    click through ``~/Library`` to find their sam2 env.
+    Lists the gimp-segany venv first (what the installers create), then any
+    legacy conda/mamba envs still on disk, then a few system pythons. Used to
+    populate a dropdown next to the Python path field so users don't have to
+    hand-type or click through ``~/Library`` to find their backend.
     """
     candidates = []
     seen = set()
 
+    if os.path.exists(SEGANY_VENV_PY):
+        candidates.append((f"gimp-segany  ({SEGANY_VENV_PY})", SEGANY_VENV_PY))
+        seen.add(SEGANY_VENV_PY)
+
+    # Legacy: surface existing conda/mamba envs so users who set things up the
+    # old way (or have other envs) can still pick them. Not required anymore.
     env_roots = [
         "/opt/miniconda3/envs",
         os.path.expanduser("~/miniconda3/envs"),
@@ -180,7 +190,8 @@ ERROR_HINTS = [
     (
         "No module named 'sam2'",
         "The SAM2 package is not installed in the selected Python env.\n"
-        "Pick a different Python3 Path (e.g. your 'sam2' conda env) or install it with:\n"
+        "Run the bundled installer (install.command / install-linux.sh), or\n"
+        "click Detect… to pick the gimp-segany env, or install it manually:\n"
         "    pip install git+https://github.com/facebookresearch/sam2.git",
     ),
     (
