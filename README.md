@@ -1,6 +1,12 @@
-## GIMP Plugin For Integration With Meta Segment Anything
+# GIMP Plugin For Integration With Meta Segment Anything
 
-> **Fork notice:** This is a fork of [Shriinivas/gimpsegany](https://github.com/Shriinivas/gimpsegany) with macOS Apple Silicon support and UI improvements. See [What's new in this fork](#whats-new-in-this-fork).
+[![lint](https://github.com/leiverkus/gimpsegany/actions/workflows/lint.yml/badge.svg)](https://github.com/leiverkus/gimpsegany/actions/workflows/lint.yml)
+[![latest release](https://img.shields.io/github/v/release/leiverkus/gimpsegany)](https://github.com/leiverkus/gimpsegany/releases/latest)
+[![license](https://img.shields.io/github/license/leiverkus/gimpsegany)](LICENSE)
+![GIMP 3](https://img.shields.io/badge/GIMP-3.x-5C5543)
+![platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-blue)
+
+> **Fork notice:** This is a cross-platform fork of [Shriinivas/gimpsegany](https://github.com/Shriinivas/gimpsegany) — macOS (MPS) / Linux (CUDA) / Windows, conda-free `uv` installers, Hugging Face model loading, and UI improvements. See [What's new in this fork](#whats-new-in-this-fork).
 
 This GIMP plugin integrates with Meta's AI-based tool Segment Anything, which enables you to effortlessly isolate objects within raster images directly from GIMP.
 
@@ -10,12 +16,27 @@ The plugin supports both **Segment Anything 1 (SAM1)** and **Segment Anything 2 
 
 ## What's new in this fork
 
-- **Apple Silicon / MPS support** — SAM2 models load and run on macOS Apple Silicon via PyTorch's MPS backend. Falls back to CUDA, then CPU. If a run hits the known MPS `Placeholder storage` error, the bridge automatically reloads on CPU and retries — no source edits needed. Set `SEGANY_FORCE_CPU=1` to skip MPS entirely.
-- **SAM1 imports are optional** — the bridge no longer requires `segment_anything` to be installed when you only use SAM2.
-- **SAM 2.1 checkpoints** — the bridge auto-detects `sam2.1_*` checkpoint filenames and loads the matching configs from `configs/sam2.1/`.
-- **Editable path fields** — the Python and Checkpoint path fields in the plugin dialog accept typed/pasted paths (Entry + Browse button) instead of being limited to a file picker. The browse dialog also shows hidden files, which is required to reach `~/Library` on macOS.
-- **Persistent backend** — the bridge runs as a long-living subprocess and caches the loaded model. The first segmentation pays the model-load cost; subsequent ones skip it (≈8× faster on Apple Silicon).
-- **Hugging Face Hub support** — instead of a local `.pt` path you can paste a HF id like `facebook/sam2.1-hiera-large` into the Checkpoint field. Requires `pip install huggingface_hub` in the SAM environment.
+**Install & platforms**
+
+- **Cross-platform, conda-free installers** — one-shot `install.command` (macOS), `install-linux.sh`, and `install-windows.ps1`. They build a virtualenv at `~/.gimp-segany/venv` using [`uv`](https://docs.astral.sh/uv/) (which provisions Python 3.11 itself) and fall back to the stdlib `venv` + `pip`.
+- **Reproducible installs** — Python dependencies are pinned in `requirements-lock.txt` and `sam2` is pinned to an exact git commit.
+- **`.gex` extension package** — releases include a double-click-installable GIMP extension for the plug-in files (experimental; still needs the backend installer).
+
+**Models & runtime**
+
+- **Apple Silicon / MPS support** — SAM2 runs on macOS Apple Silicon via PyTorch's MPS backend (falls back to CUDA, then CPU). On the known MPS `Placeholder storage` error the bridge auto-reloads on CPU and retries — no source edits. `SEGANY_FORCE_CPU=1` skips MPS entirely.
+- **Hugging Face Hub support** — paste a HF id like `facebook/sam2.1-hiera-large` into the Checkpoint field instead of a local `.pt`; weights are cached under `~/.cache/huggingface`.
+- **SAM 2.1 checkpoints** — auto-detects `sam2.1_*` filenames and loads the matching `configs/sam2.1/` configs.
+- **SAM1 imports are optional** — SAM2-only environments no longer need `segment_anything` installed.
+- **Persistent backend** — the bridge stays alive and caches the loaded model; repeat segmentations skip the load cost (≈8× faster on Apple Silicon).
+
+**UI & internals**
+
+- **Editable path fields** — the Python and Checkpoint fields accept typed/pasted paths (Entry + Browse), and the browse dialog shows hidden files (needed for `~/Library` on macOS).
+- **PNG mask layers** — masks are transported as colored PNGs and loaded directly as GIMP layers (no custom binary format, no per-pixel Python).
+- **Modular code** — GIMP-independent logic lives in `segany_backend.py` and is unit-tested in CI.
+
+See [CHANGELOG.md](CHANGELOG.md) for the full version history.
 
 ---
 
