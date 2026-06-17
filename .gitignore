@@ -1,0 +1,14 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.Python
+
+# Tooling caches
+.ruff_cache/
+
+# Local plugin settings (machine-specific paths)
+segany_settings.json
