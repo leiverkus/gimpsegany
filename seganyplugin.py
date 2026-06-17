@@ -102,9 +102,14 @@ def _looks_like_hf_id(path):
     return path.count("/") == 1
 
 
-# Where the bundled installers (install.command / install-linux.sh) create the
-# SAM2 backend virtualenv. Kept in sync with the SEGANY_VENV in those scripts.
-SEGANY_VENV_PY = os.path.expanduser("~/.gimp-segany/venv/bin/python")
+# Where the bundled installers (install.command / install-linux.sh /
+# install-windows.ps1) create the SAM2 backend virtualenv. Kept in sync with
+# the SEGANY_VENV in those scripts. venv lays out the interpreter differently
+# on Windows (Scripts\python.exe) than on Unix (bin/python).
+if os.name == "nt":
+    SEGANY_VENV_PY = os.path.expanduser(r"~\.gimp-segany\venv\Scripts\python.exe")
+else:
+    SEGANY_VENV_PY = os.path.expanduser("~/.gimp-segany/venv/bin/python")
 
 
 def _default_python_search_dir():

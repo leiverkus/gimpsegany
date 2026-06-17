@@ -51,6 +51,18 @@ It does the same as the macOS installer (uv when present, stdlib `venv` + `pip` 
 
 Requirements: GIMP 3 already installed and launched once, and either `uv` on your `PATH` (`curl -LsSf https://astral.sh/uv/install.sh | sh`) or an existing Python 3.10+.
 
+### Quick install (Windows)
+
+Clone this repo, then in PowerShell (from the repo folder) run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File install-windows.ps1
+```
+
+Same behaviour as the other installers (uv when present, stdlib `venv` + `pip` otherwise — **no conda**): builds the `%USERPROFILE%\.gimp-segany\venv` backend, copies the plugin files into `%APPDATA%\GIMP\3.x\plug-ins\seganyplugin\`, and seeds a default `segany_settings.json`. pip pulls the CUDA-enabled torch wheels, so NVIDIA GPUs work out of the box.
+
+Requirements: GIMP 3 already installed and launched once, and either `uv` on your `PATH` (`irm https://astral.sh/uv/install.ps1 | iex`) or an existing Python 3.10+ (the `py` launcher or `python` on `PATH`).
+
 ### Manual install
 
 If you prefer to set things up by hand (Windows, or a custom environment), follow the sections below.
