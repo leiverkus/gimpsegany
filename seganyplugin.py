@@ -105,7 +105,7 @@ from gi.repository import Gtk
 
 
 class OptionsDialog(Gtk.Dialog):
-    def __init__(self, image, boxPathDict):
+    def __init__(self, image):
         Gtk.Dialog.__init__(
             self,
             title=f"GIMP — Segment Anything (v{__version__})",
@@ -119,7 +119,6 @@ class OptionsDialog(Gtk.Dialog):
         self.set_default_size(400, 200)
         self.set_modal(True)
 
-        self.boxPathNames = sorted(boxPathDict.keys())
         self.isGrayScale = image.get_base_type() == Gimp.ImageType.GRAYA_IMAGE
         scriptDir = os.path.dirname(os.path.abspath(__file__))
         self.configFilePath = os.path.join(scriptDir, "segany_settings.json")
@@ -789,12 +788,6 @@ class OptionsDialog(Gtk.Dialog):
         return run_values
 
 
-def getPathDict(image):
-    return {}
-
-
-# --- Persistent bridge process -------------------------------------------
-#
 def exportSelection(image, expfile, exportCnt):
     procedure = Gimp.get_pdb().lookup_procedure("gimp-selection-bounds")
     config = procedure.create_config()
@@ -1127,8 +1120,7 @@ class SegAnyPlugin(Gimp.PlugIn):
             from gi.repository import GimpUi
 
             GimpUi.init("seg-any-gimp3")
-            boxPathDict = getPathDict(image)
-            dialog = OptionsDialog(image, boxPathDict)
+            dialog = OptionsDialog(image)
             response = dialog.run()
             values = dialog.get_values() if response == Gtk.ResponseType.OK else None
             dialog.destroy()

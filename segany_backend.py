@@ -226,7 +226,6 @@ class DialogValue:
         self.isRandomColor = False
         self.maskColor = [255, 0, 0, 255]
         self.selPtCnt = 10
-        self.selBoxPathName = None
         self.segRes = "Medium"
         self.cropNLayers = 0
         self.minMaskArea = 0

@@ -7,6 +7,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Tagging `vX.Y.Z` triggers the release workflow, which builds the plugin zip and
 publishes a GitHub release (a `-rc`/`-beta` suffix marks it as a pre-release).
 
+## [Unreleased]
+
+### Removed
+- Vestigial "box path" code: the `getPathDict` stub (always returned `{}`)
+  and the dead `boxPathDict` / `boxPathNames` / `selBoxPathName` it fed, which
+  were never read. A dead-code scan found nothing else removable.
+
 ## [3.1.0] - 2026-06-17
 
 ### Added
