@@ -84,6 +84,10 @@ import glob
 import json
 import logging
 
+# Fork version. Keep in sync with __version__ in seganybridge.py and the latest
+# entry in CHANGELOG.md.
+__version__ = "3.0.0"
+
 
 def _parse_int(text, default):
     try:
@@ -350,7 +354,7 @@ class OptionsDialog(Gtk.Dialog):
     def __init__(self, image, boxPathDict):
         Gtk.Dialog.__init__(
             self,
-            title="GIMP — Segment Anything",
+            title=f"GIMP — Segment Anything (v{__version__})",
             transient_for=None,
             flags=Gtk.DialogFlags.MODAL,
         )

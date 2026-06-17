@@ -7,13 +7,23 @@ sam2. seganybridge guards those heavy imports, so it stays importable here.
 """
 
 import os
+import re
 import sys
 
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, REPO)
 
 import seganybridge as b  # noqa: E402
+
+
+def _grep_version(filename):
+    """Read __version__ from a source file without importing it (the plugin
+    needs GIMP's gi bindings, which aren't available in CI)."""
+    text = open(os.path.join(REPO, filename), encoding="utf-8").read()
+    m = re.search(r'^__version__\s*=\s*"([^"]+)"', text, re.MULTILINE)
+    return m.group(1) if m else None
 
 
 class TestSelectSam2Config:
@@ -144,6 +154,23 @@ class TestForceCpuRequested:
         for v in ("0", "false", "", "no"):
             monkeypatch.setenv("SEGANY_FORCE_CPU", v)
             assert b._force_cpu_requested() is False
+
+
+class TestVersionDiscipline:
+    """The two source files and the changelog must declare the same version."""
+
+    def test_bridge_version_is_semver(self):
+        assert re.fullmatch(r"\d+\.\d+\.\d+", b.__version__), b.__version__
+
+    def test_plugin_matches_bridge(self):
+        assert _grep_version("seganyplugin.py") == b.__version__
+
+    def test_changelog_top_entry_matches(self):
+        text = open(os.path.join(REPO, "CHANGELOG.md"), encoding="utf-8").read()
+        # First "## [X.Y.Z]" heading is the current version.
+        m = re.search(r"^##\s*\[(\d+\.\d+\.\d+)\]", text, re.MULTILINE)
+        assert m, "no versioned heading found in CHANGELOG.md"
+        assert m.group(1) == b.__version__
 
 
 class TestSaveMasks:

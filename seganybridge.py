@@ -76,6 +76,10 @@ try:
 except ImportError:
     build_sam2_hf = None
 
+# Fork version. Keep in sync with __version__ in seganyplugin.py and the
+# latest entry in CHANGELOG.md.
+__version__ = "3.0.0"
+
 # Maps Hugging Face model ids to the internal model_type the SAM2 strategy
 # expects. Both 2.0 and 2.1 ids are recognised.
 HF_MODEL_TYPE_LOOKUP = {
@@ -570,6 +574,7 @@ def _run_test(model_type, checkpoint_path):
         "setup_check": "ok",
         "device": device,
         "checkpoint": checkpoint_path,
+        "version": __version__,
     }))
     strategy.cleanup()
     return 0
