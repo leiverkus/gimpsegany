@@ -13,6 +13,9 @@ publishes a GitHub release (a `-rc`/`-beta` suffix marks it as a pre-release).
 - Vestigial "box path" code: the `getPathDict` stub (always returned `{}`)
   and the dead `boxPathDict` / `boxPathNames` / `selBoxPathName` it fed, which
   were never read. A dead-code scan found nothing else removable.
+- The `legacy/` GIMP 2 plug-in files and the commented-out GIMP 2 steps in the
+  release workflow. This fork is GIMP 3 only; the files remain in git history
+  and upstream.
 
 ## [3.1.0] - 2026-06-17
 

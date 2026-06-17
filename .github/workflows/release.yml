@@ -34,9 +34,6 @@ jobs:
       - name: Build GIMP extension (.gex)
         run: bash packaging/build-gex.sh
 
-      # - name: Create GIMP 2 Plugin Zip
-      #   run: zip gimp-segany-gimp2.zip legacy/seganyplugin_GIMP2.py legacy/seganybridge_GIMP2_SAM1.py
-
       - name: Create Release
         id: create_release
         uses: softprops/action-gh-release@v2
@@ -48,6 +45,5 @@ jobs:
           files: |
             gimp-segany-gimp3.zip
             gimp-segany.gex
-            # gimp-segany-gimp2.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
